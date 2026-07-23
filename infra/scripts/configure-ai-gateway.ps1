@@ -58,8 +58,35 @@ function Test-AzRestResource($Uri) {
     }
 }
 
+function New-PrivateTempFile {
+    $path = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+    try {
+        if ($IsWindows) {
+            [IO.File]::WriteAllBytes($path, [byte[]]::new(0))
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            & icacls.exe $path /inheritance:r /grant:r "${identity}:(R,W)" | Out-Null
+        } else {
+            $options = [IO.FileStreamOptions]::new()
+            $options.Mode = [IO.FileMode]::CreateNew
+            $options.Access = [IO.FileAccess]::Write
+            $options.Share = [IO.FileShare]::None
+            $options.UnixCreateMode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite
+            [IO.File]::Open($path, $options).Dispose()
+        }
+        return $path
+    } catch {
+        Remove-Item $path -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function ConvertTo-DotEnvValue($Value) {
+    $escaped = ([string]$Value).Replace('\', '\\').Replace('"', '\"')
+    return "`"$escaped`""
+}
+
 function Invoke-AzRestPutJson($Uri, $Body) {
-    $tempFile = [IO.Path]::GetTempFileName()
+    $tempFile = New-PrivateTempFile
     try {
         $json = $Body | ConvertTo-Json -Depth 30 -Compress
         [IO.File]::WriteAllText($tempFile, $json, [Text.UTF8Encoding]::new($false))
@@ -359,7 +386,18 @@ azd env set AZURE_AI_GATEWAY_ENDPOINT $gatewayUrl
 azd env set AZURE_AI_GATEWAY_MODEL $gatewayModel
 azd env set AZURE_AI_GATEWAY_MINI_MODEL $gatewayMiniModel
 azd env set GITHUB_REPOSITORY $githubRepository
-azd env set AZURE_AI_GATEWAY_API_KEY $gatewayApiKey | Out-Null
+$azdSecretFile = New-PrivateTempFile
+try {
+    $secretLine = "AZURE_AI_GATEWAY_API_KEY=$(ConvertTo-DotEnvValue $gatewayApiKey)"
+    [IO.File]::WriteAllText(
+        $azdSecretFile,
+        $secretLine + [Environment]::NewLine,
+        [Text.UTF8Encoding]::new($false)
+    )
+    azd env set --file $azdSecretFile | Out-Null
+} finally {
+    Remove-Item $azdSecretFile -Force -ErrorAction SilentlyContinue
+}
 azd env set TOOLBOX_NAME $toolboxName
 
 Write-Host "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
@@ -372,6 +410,7 @@ azd ai connection create $toolboxConnectionName `
     --no-prompt `
     --project-endpoint $projectEndpoint `
     -o json | Out-Null
+$gatewayApiKey = $null
 
 $toolboxExists = $true
 try {

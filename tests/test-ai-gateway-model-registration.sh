@@ -59,7 +59,7 @@ fi
 
 mini_capacity="$(jq -r '.parameters.miniModelCapacity.defaultValue' "$compiled_root_template")"
 if [ "$mini_capacity" != "200" ]; then
-  echo "Mini deployment capacity must fit ghapp requests with built-in tool definitions." >&2
+  echo "Mini deployment capacity must fit GitHub Copilot app requests with built-in tool definitions." >&2
   echo "Expected: 200" >&2
   echo "Actual:   $mini_capacity" >&2
   exit 1
