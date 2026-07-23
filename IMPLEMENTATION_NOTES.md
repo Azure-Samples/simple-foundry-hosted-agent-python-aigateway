@@ -186,7 +186,7 @@ value sent through AI Gateway.
 The default split is:
 
 - Foundry, storage, Container Registry, and monitoring: `eastus2`
-- AI Gateway and Connector Namespace: `eastus2euap`
+- AI Gateway and Connector Namespace: `eastus2`
 
 The Foundry region allowlist is:
 
@@ -202,8 +202,6 @@ The AI Gateway preview region allowlist is:
 - `westus2`
 - `westus3`
 - `eastus`
-- `centraluseuap`
-- `eastus2euap`
 - `westcentralus`
 - `swedencentral`
 - `eastus2`

@@ -46,7 +46,7 @@ if [ "${1:-}" = "env" ] && [ "${2:-}" = "get-value" ]; then
       [ "${STUB_NO_GATEWAY_VALUES:-0}" = "0" ] || exit 1
       printf '%s' "${STUB_GATEWAY_NAME:-aigw-abc12345}"
       ;;
-    AI_GATEWAY_LOCATION) printf '%s' "${STUB_GATEWAY_LOCATION:-eastus2euap}" ;;
+    AI_GATEWAY_LOCATION) printf '%s' "${STUB_GATEWAY_LOCATION:-eastus2}" ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -63,7 +63,7 @@ subscription_id="${STUB_SUBSCRIPTION_ID:-00000000-0000-0000-0000-000000000001}"
 environment_name="${STUB_ENVIRONMENT_NAME:-tues}"
 resource_group="${STUB_RESOURCE_GROUP:-rg-tues-abc12345-gateway}"
 gateway_name="${STUB_GATEWAY_NAME:-aigw-abc12345}"
-location="${STUB_GATEWAY_LOCATION:-eastus2euap}"
+location="${STUB_GATEWAY_LOCATION:-eastus2}"
 
 read_state() {
   local file="$state_dir/$1"
@@ -226,7 +226,7 @@ run_lifecycle() {
     AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000001 \
     AI_GATEWAY_RESOURCE_GROUP=rg-tues-abc12345-gateway \
     AI_GATEWAY_NAME=aigw-abc12345 \
-    AI_GATEWAY_LOCATION=eastus2euap \
+    AI_GATEWAY_LOCATION=eastus2 \
     APIM_LIFECYCLE_STATE_FILE="$marker_file" \
     APIM_LIFECYCLE_POLL_INITIAL_SECONDS=0 \
     APIM_LIFECYCLE_POLL_MAX_SECONDS=0 \
@@ -246,7 +246,7 @@ run_lifecycle_without_gateway_values() {
     STUB_GROUP_OWNER="${STUB_GROUP_OWNER:-tues}" \
     AZURE_ENV_NAME=tues \
     AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000001 \
-    AI_GATEWAY_LOCATION=eastus2euap \
+    AI_GATEWAY_LOCATION=eastus2 \
     APIM_LIFECYCLE_STATE_FILE="$marker_file" \
     APIM_LIFECYCLE_POLL_INITIAL_SECONDS=0 \
     APIM_LIFECYCLE_POLL_MAX_SECONDS=0 \
@@ -400,7 +400,7 @@ environment_name=tues
 subscription_id=00000000-0000-0000-0000-000000000001
 resource_group=rg-tues-abc12345-gateway
 gateway_name=aigw-abc12345
-location=eastus2euap
+location=eastus2
 state=ready
 action_epoch=0
 failure_id=

@@ -26,14 +26,12 @@ param location string
   'westus2'
   'westus3'
   'eastus'
-  'centraluseuap'
-  'eastus2euap'
   'westcentralus'
   'swedencentral'
   'eastus2'
 ])
 @description('Azure region for the release-gated Microsoft.ApiManagement/service AIGateway resource.')
-param aiGatewayLocation string = 'eastus2euap'
+param aiGatewayLocation string = 'eastus2'
 
 @description('Optional Azure AD user or service principal object ID for development access.')
 param principalId string = ''
