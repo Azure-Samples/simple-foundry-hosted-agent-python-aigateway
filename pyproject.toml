@@ -1,0 +1,14 @@
+[project]
+name = "simple-foundry-hosted-agent-python-aigateway"
+version = "0.1.0"
+description = "Daily GitHub repo digest automation using Microsoft Agent Framework, Foundry Hosted Agents, and AI Gateway."
+requires-python = ">=3.13"
+dependencies = [
+    "agent-framework-foundry-hosting>=1.0.0a260630",
+    "agent-framework-openai>=1.10.1",
+    "azure-identity>=1.25.3",
+    "python-dotenv",
+]
+
+[tool.uv]
+package = false
