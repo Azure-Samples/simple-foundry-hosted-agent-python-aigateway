@@ -1,0 +1,6 @@
+kind: hosted
+name: simple-foundry-hosted-agent-python-aigateway
+description: Daily repo digest agent hosted by Microsoft Foundry and routed through AI Gateway.
+protocols:
+  - protocol: responses
+    version: 1.0.0
