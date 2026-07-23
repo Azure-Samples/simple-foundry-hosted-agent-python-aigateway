@@ -10,7 +10,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 $aiGatewayApiVersion = "2025-09-01-preview"
 $deletedServiceApiVersion = "2024-05-01"
-$defaultAiGatewayLocation = "eastus2"
+$defaultAiGatewayLocation = "eastus2euap"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 
 function Get-IntegerSetting($Name, $Default) {

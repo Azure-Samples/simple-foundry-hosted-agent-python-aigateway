@@ -26,12 +26,14 @@ param location string
   'westus2'
   'westus3'
   'eastus'
+  'centraluseuap'
+  'eastus2euap'
   'westcentralus'
   'swedencentral'
   'eastus2'
 ])
 @description('Azure region for the release-gated Microsoft.ApiManagement/service AIGateway resource.')
-param aiGatewayLocation string = 'eastus2'
+param aiGatewayLocation string = 'eastus2euap'
 
 @description('Optional Azure AD user or service principal object ID for development access.')
 param principalId string = ''
@@ -102,7 +104,7 @@ param modelSkuName string = 'GlobalStandard'
 @description('Global Standard capacity assigned to the full model deployment.')
 param modelCapacity int = 20
 
-@description('Global Standard capacity assigned to the mini model deployment. Capacity 200 supports ghapp requests that include large built-in tool schemas.')
+@description('Global Standard capacity assigned to the mini model deployment. Capacity 200 supports GitHub Copilot app requests that include large built-in tool schemas.')
 param miniModelCapacity int = 200
 
 @description('ARM-safe deployment and Gateway catalog name for the full model.')

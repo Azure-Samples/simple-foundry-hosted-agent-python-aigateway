@@ -186,7 +186,7 @@ value sent through AI Gateway.
 The default split is:
 
 - Foundry, storage, Container Registry, and monitoring: `eastus2`
-- AI Gateway and Connector Namespace: `eastus2`
+- AI Gateway and Connector Namespace: `eastus2euap`
 
 The Foundry region allowlist is:
 
@@ -202,6 +202,8 @@ The AI Gateway preview region allowlist is:
 - `westus2`
 - `westus3`
 - `eastus`
+- `centraluseuap`
+- `eastus2euap`
 - `westcentralus`
 - `swedencentral`
 - `eastus2`
@@ -218,9 +220,9 @@ If `gpt-5.6-sol` is unavailable, set `modelName=gpt-5.5` and
 
 Global Standard capacity maps to the Gateway token limit at 1,000 tokens per
 minute per capacity unit. Capacity 20 therefore registers 20,000 tokens per
-minute for the full deployment. Mini capacity 200 accommodates requests from
-the GitHub Copilot app, also called ghapp, when built-in tool definitions make
-the prompt substantially larger.
+minute for the full deployment. Mini capacity 200 accommodates GitHub Copilot
+app requests when built-in tool definitions make the prompt substantially
+larger.
 
 The agent caps each response at 2,048 output tokens. Azure quota evaluation
 uses an estimate based on the prompt and requested maximum output, so this cap
@@ -237,6 +239,17 @@ reprovision cannot retrieve the value again.
 The Gateway key is sent in the explicit `Api-Key` header. It is not sent as
 `Authorization: Bearer`. The backing Foundry account has local authentication
 disabled, and provisioning does not call the Foundry `listKeys` action.
+
+The provisioning scripts keep token-bearing ToolServer JSON in user-only
+temporary files. Bash supplies the model-route `Api-Key` through curl standard
+input, and both scripts use a user-only dotenv file with `azd env set --file`
+instead of placing the Gateway key in that command's arguments.
+
+The current Foundry azd connection command accepts custom credentials only
+through `--custom-key`. The scripts therefore pass the Gateway key in that
+command's arguments for the duration of the connection upsert, suppress command
+output, and clear the variable immediately afterward. Run provisioning only on
+a trusted machine where other users cannot inspect process arguments.
 
 The runtime fails when the Gateway endpoint or key is missing. It has no direct
 Foundry fallback.
@@ -342,6 +355,7 @@ uv run python -m compileall -q .
 uv run python -m unittest discover -s tests
 bash tests/test-apim-lifecycle.sh
 bash tests/test-ai-gateway-model-registration.sh
+bash tests/test-provisioning-secret-handling.sh
 az bicep build --file infra/foundry-agents/main.bicep
 az bicep build --file infra/ai-gateway/main.bicep
 az bicep build --file infra/foundry-models/main.bicep

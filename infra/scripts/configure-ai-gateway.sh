@@ -38,6 +38,13 @@ require_value() {
   printf '%s' "$value"
 }
 
+quote_env() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
 remove_azd_env_values() {
   local env_file="${AZD_ENV_FILE:-.azure/${environment_name}/.env}"
   [ -f "$env_file" ] || return 0
@@ -84,19 +91,25 @@ verify_gateway_model_route() {
   local request_body
   local response_file
   local status=""
+  local config_key
 
   request_body="$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "messages": [{"role": "user", "content": "Reply with exactly one word: ok"}], "max_completion_tokens": 128}))' "$model")"
   response_file="$(mktemp)"
+  config_key="${api_key//\\/\\\\}"
+  config_key="${config_key//\"/\\\"}"
 
   for attempt in $(seq 1 15); do
     status="$(curl -sS \
+      --config - \
       -o "$response_file" \
       -w '%{http_code}' \
       -X POST \
       "${gateway_url%/}/default/models/openai/v1/chat/completions" \
-      -H "Api-Key: ${api_key}" \
       -H "Content-Type: application/json" \
-      --data-binary "$request_body" || true)"
+      --data-binary "$request_body" <<EOF
+header = "Api-Key: ${config_key}"
+EOF
+    )" || true
     case "$status" in
       2??)
         rm -f "$response_file"
@@ -207,8 +220,9 @@ elif [ "$#" -gt 0 ]; then
 fi
 
 tool_server_body=""
+azd_secret_file=""
 cleanup() {
-  rm -f "$tool_server_body"
+  rm -f "$tool_server_body" "$azd_secret_file"
 }
 trap cleanup EXIT
 
@@ -360,7 +374,11 @@ azd env set AZURE_AI_GATEWAY_ENDPOINT "$gateway_url"
 azd env set AZURE_AI_GATEWAY_MODEL "$gateway_model"
 azd env set AZURE_AI_GATEWAY_MINI_MODEL "$gateway_mini_model"
 azd env set GITHUB_REPOSITORY "$github_repository"
-azd env set AZURE_AI_GATEWAY_API_KEY "$gateway_api_key" >/dev/null
+azd_secret_file="$(mktemp)"
+printf 'AZURE_AI_GATEWAY_API_KEY=%s\n' "$(quote_env "$gateway_api_key")" > "$azd_secret_file"
+azd env set --file "$azd_secret_file" >/dev/null
+rm -f "$azd_secret_file"
+azd_secret_file=""
 azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
 
 echo "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
@@ -373,6 +391,7 @@ azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
   --no-prompt \
   --project-endpoint "$project_endpoint" \
   -o json >/dev/null
+gateway_api_key=""
 
 if ! toolbox_json="$(azd ai toolbox show "$TOOLBOX_NAME" \
   --no-prompt \
