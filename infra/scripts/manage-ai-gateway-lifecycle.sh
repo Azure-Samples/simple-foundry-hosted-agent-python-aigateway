@@ -216,8 +216,7 @@ discover_live_gateway() {
   if ! candidates="$(az resource list \
     --subscription "$subscription_id" \
     --resource-type Microsoft.ApiManagement/service \
-    --tag "azd-env-name=${environment_name}" \
-    --query "[?sku.name=='AIGateway'].[name,resourceGroup,location]" \
+    --query "[?tags.\"azd-env-name\"=='${environment_name}' && sku.name=='AIGateway'].[name,resourceGroup,location]" \
     -o tsv)"; then
     fail "could not discover AI Gateway resources for azd environment ${environment_name}."
   fi

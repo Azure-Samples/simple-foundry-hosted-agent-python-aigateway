@@ -146,8 +146,7 @@ function Find-LiveGateway {
     $candidateLines = & az resource list `
         --subscription $subscriptionId `
         --resource-type Microsoft.ApiManagement/service `
-        --tag "azd-env-name=$environmentName" `
-        --query "[?sku.name=='AIGateway'].[name,resourceGroup,location]" `
+        --query "[?tags.`"azd-env-name`"=='$environmentName' && sku.name=='AIGateway'].[name,resourceGroup,location]" `
         -o tsv
     if ($LASTEXITCODE -ne 0) {
         throw "AI Gateway lifecycle error: could not discover AI Gateway resources for azd environment $environmentName."

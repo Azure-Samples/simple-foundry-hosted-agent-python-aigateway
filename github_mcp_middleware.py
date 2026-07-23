@@ -12,9 +12,8 @@ logger = logging.getLogger(__name__)
 
 GITHUB_MCP_TOOLS = {
     "github_actions_list",
+    "github_list_issues",
     "github_list_pull_requests",
-    "github_search_issues",
-    "github_search_repositories",
 }
 
 
@@ -33,6 +32,8 @@ def _login(value: Any) -> str | None:
 def _label_names(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
+    if all(isinstance(label, str) for label in value):
+        return list(value)
     return [
         name
         for label in value
@@ -57,10 +58,6 @@ def _normalize_github_arguments(
     *,
     cutoff: datetime,
 ) -> None:
-    if tool_name == "github_search_repositories":
-        arguments.update(minimal_output=True, perPage=1, page=1)
-        return
-
     if tool_name == "github_list_pull_requests":
         arguments.update(
             state="all",
@@ -71,13 +68,17 @@ def _normalize_github_arguments(
         )
         return
 
-    if tool_name == "github_search_issues":
+    if tool_name == "github_list_issues":
         cutoff_text = cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # list_issues uses the core GraphQL API (not the Search API) and paginates
+        # with an `after` cursor, so it accepts neither `page` nor a query string.
+        arguments.pop("page", None)
+        arguments.pop("query", None)
         arguments.update(
-            query=f"is:issue updated:>={cutoff_text}",
-            sort="updated",
-            order="desc",
-            page=1,
+            orderBy="UPDATED_AT",
+            direction="DESC",
+            since=cutoff_text,
+            perPage=100,
         )
         return
 
@@ -91,24 +92,6 @@ def _normalize_github_arguments(
             per_page=100,
             page=1,
         )
-
-
-def _compact_repository(item: Mapping[str, Any]) -> dict[str, Any]:
-    return _select_fields(
-        item,
-        (
-            "full_name",
-            "description",
-            "html_url",
-            "language",
-            "stargazers_count",
-            "forks_count",
-            "open_issues_count",
-            "updated_at",
-            "default_branch",
-            "archived",
-        ),
-    )
 
 
 def _compact_pull_request(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -168,14 +151,6 @@ def _compact_github_payload(
     *,
     cutoff: datetime,
 ) -> dict[str, Any]:
-    if tool_name == "github_search_repositories":
-        items = _require_mapping_list(payload, "items")
-        return {
-            "total_count": payload.get("total_count"),
-            "incomplete_results": payload.get("incomplete_results"),
-            "items": [_compact_repository(item) for item in items],
-        }
-
     if tool_name == "github_list_pull_requests":
         items = _require_mapping_list(payload)
         recent = [item for item in items if _is_recent(item.get("updated_at"), cutoff)]
@@ -184,12 +159,13 @@ def _compact_github_payload(
             "pull_requests": [_compact_pull_request(item) for item in recent],
         }
 
-    if tool_name == "github_search_issues":
-        items = _require_mapping_list(payload, "items")
+    if tool_name == "github_list_issues":
+        items = _require_mapping_list(payload, "issues")
+        recent = [item for item in items if _is_recent(item.get("updated_at"), cutoff)]
         return {
-            "total_count": payload.get("total_count"),
-            "incomplete_results": payload.get("incomplete_results"),
-            "items": [_compact_issue(item) for item in items],
+            "total_count": payload.get("totalCount"),
+            "returned_count": len(recent),
+            "issues": [_compact_issue(item) for item in recent],
         }
 
     if tool_name == "github_actions_list":
