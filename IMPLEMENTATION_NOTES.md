@@ -29,6 +29,63 @@ Functions application.
   model provider, model registrations, runtime key, and monitoring.
 - `chat.py` is a local console client for the Responses endpoint.
 
+## Deployment profiles
+
+`gatewayDeploymentMode` is the sample-owned deployment switch. `infra/main.parameters.json`
+maps it from `GATEWAY_DEPLOYMENT_MODE` and defaults to `managed`.
+
+### Managed
+
+Managed mode preserves the original full-stack `azd up` behavior. It creates
+all three resource groups and deploys:
+
+- The Foundry hosted-agent project, storage, Container Registry, agent
+  monitoring, project connections, hosted agent, routine, and Toolbox.
+- The separate Foundry model account and both model deployments.
+- AI Gateway, Gateway monitoring, runtime key, Foundry provider, model
+  registrations, Connector Namespace, and the GitHub ToolServer.
+
+The preprovision and postdown hooks own recovery, deletion, and purge only for
+the managed Gateway tagged for the current azd environment.
+
+### Existing
+
+Existing mode creates only the Foundry hosted-agent project and its dependent
+resources. The Gateway resource group, Foundry model resource group,
+`foundry-models` module, and `ai-gateway` module all have the compiled ARM
+condition `gatewayDeploymentMode == managed`, so Azure does not receive those
+resources in existing mode.
+
+The `.ai-gateway-studio.json` input contract contains:
+
+```json
+{
+  "schemaVersion": 1,
+  "gatewayDeploymentMode": "existing",
+  "gatewayResourceId": "/subscriptions/<subscription>/resourceGroups/<resource-group>/providers/Microsoft.ApiManagement/service/<gateway-name>",
+  "gatewayEndpoint": "https://<gateway-host>/",
+  "githubMcpEndpoint": "https://<gateway-host>/default/toolservers/<github-toolserver>/mcp",
+  "modelAliases": {
+    "default": "<full-model-alias>",
+    "mini": "<mini-model-alias>"
+  }
+}
+```
+
+The resource ID can use `Microsoft.ApiManagement/service` or
+`Microsoft.ApiManagement/aigateways`. No secret is permitted in the handoff.
+`scripts/configure-existing-gateway.sh` and
+`scripts/configure-existing-gateway.ps1` validate the contract and select the
+profile by writing local azd environment values. They do not provision or
+modify Azure.
+
+In existing mode, both lifecycle scripts exit before discovery, recovery,
+deletion, or purge. The configuration hooks skip provider checks, model
+registration, GitHub credential acquisition, and the GitHub ToolServer `PUT`.
+They can call the Gateway control plane only to list keys and invoke
+`listSecrets`, then create Foundry project connections and Toolbox
+configuration.
+
 The scheduled routine is named `daily-repo-digest`. It runs at 9 AM in the
 configured timezone and asks the agent for a digest of
 `microsoft/agent-framework`. The Responses API also supports interactive
@@ -182,7 +239,7 @@ the command line.
    - For a public repository you do not own, choose **Public repositories
      (read-only)**. This grants the read-only `pull` permission with no
      repository-permission selection required; skip to step 7.
-6. **Repository permissions** (only when you selected a specific repository) —
+6. **Repository permissions** (only when you selected a specific repository):
    set each of these to **Read-only** and leave everything else at **No
    access**:
    - Metadata (required; auto-selected)
@@ -207,10 +264,10 @@ macOS or Linux (bash):
 ```bash
 read -rsp "Fine-grained GitHub token: " GH_TOKEN && echo
 export GH_TOKEN
-azd provision
+AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
 ```
 
-macOS (zsh — the default macOS shell). The `read` prompt syntax differs from
+macOS (zsh, the default macOS shell). The `read` prompt syntax differs from
 bash: the prompt goes *inside* the variable spec as `VAR?prompt`, and `-p` must
 not be used (in zsh `-p` reads from a coprocess, so no prompt appears). Paste
 one line at a time so `read` does not consume the following lines as input:
@@ -218,14 +275,14 @@ one line at a time so `read` does not consume the following lines as input:
 ```zsh
 read -rs "GH_TOKEN?Fine-grained GitHub token: " && echo
 export GH_TOKEN
-azd provision
+AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
 ```
 
 Shell-agnostic alternative (hidden entry, works in both bash and zsh):
 
 ```bash
 export GH_TOKEN="$(python3 -c 'import getpass; print(getpass.getpass("Fine-grained GitHub token: "))')"
-azd provision
+AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
 ```
 
 Windows (PowerShell 7):
@@ -233,10 +290,11 @@ Windows (PowerShell 7):
 ```powershell
 $GH_TOKEN = Read-Host -Prompt "Fine-grained GitHub token" -AsSecureString
 $env:GH_TOKEN = [System.Net.NetworkCredential]::new("", $GH_TOKEN).Password
-azd provision
+$env:AZURE_DEV_USER_AGENT = "microsoft_foundry_skill"; azd provision
 ```
 
-`azd up` also works in place of `azd provision`. A GitHub App installation
+`AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd up` also works in place of
+`AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision`. A GitHub App installation
 access token (`ghs_...`) is an equally accepted least-privilege credential.
 
 ### 3. Confirm the warning is gone
@@ -258,7 +316,7 @@ the portal as above is what enforces it.
 
 ## AI Gateway Bicep contracts
 
-The root deployment creates three resource groups:
+In managed mode, the root deployment creates three resource groups:
 
 - `foundryagents` for the Foundry project, agent hosting, storage, Container
   Registry, and hosted-agent monitoring.
@@ -266,8 +324,13 @@ The root deployment creates three resource groups:
 - `gateway` for AI Gateway, Connector Namespace, Gateway monitoring, model
   provider, and model registrations.
 
-The only cross-group runtime authorization is the AI Gateway system identity's
-Foundry User role assignment on the model account. The public Azure
+In existing mode, only `foundryagents` is created. The separate model account,
+model deployments, AI Gateway, Gateway monitoring, runtime key, provider and
+model catalog, Connector Namespace, and Gateway role assignment are all absent
+from the evaluated deployment.
+
+In managed mode, the only cross-group runtime authorization is the AI Gateway
+system identity's Foundry User role assignment on the model account. The public Azure
 role-definition ID used by the template is
 `53ca6127-db72-4b80-b1b0-d745d6d5456d`.
 
@@ -357,10 +420,25 @@ execution.
 
 ## Runtime key handling
 
-Bicep creates `apiKeys/default`. The postprovision hook retrieves the Gateway
-key through `listSecrets` and retains `listValues` as a preview-contract
-fallback. It can reuse the saved azd environment value when a later
-reprovision cannot retrieve the value again.
+Managed-mode Bicep creates `apiKeys/default`. In both modes, the postprovision
+hook lists Gateway keys, selects the first active key, retrieves it through
+`listSecrets`, and retains `listValues` as a preview-contract fallback. It can
+reuse the saved azd environment value when a later reprovision cannot retrieve
+the value again.
+
+The key is not a Bicep parameter or output. `azure.yaml` declares
+`ai-gateway-model` as a `CustomKeys` Foundry project connection. The hosted
+agent receives its nonsecret target and secret through the official runtime
+connection placeholders:
+
+```yaml
+AZURE_AI_GATEWAY_ENDPOINT: ${{connections.ai-gateway-model.target}}
+AZURE_AI_GATEWAY_API_KEY: ${{connections.ai-gateway-model.credentials.Api-Key}}
+```
+
+The separate `aigw-github` `RemoteTool` connection stores the same key as an
+`Api-Key` custom header for Toolbox. The hosted agent never receives the key
+through ordinary `${AZURE_AI_GATEWAY_API_KEY}` substitution.
 
 The Gateway key is sent in the explicit `Api-Key` header. It is not sent as
 `Authorization: Bearer`. The backing Foundry account has local authentication
@@ -382,6 +460,9 @@ identity cleanup has completed.
 - Postdown completes the explicit teardown, waits for the live resource to
   disappear, purges the soft-deleted APIM service, and waits for identity
   cleanup.
+
+Both scripts check `GATEWAY_DEPLOYMENT_MODE` first. Existing mode exits before
+any Gateway lookup, recovery, `DELETE`, soft-delete purge, or identity wait.
 
 The scripts use bounded exponential polling. Defaults are:
 
@@ -445,15 +526,19 @@ The local file contains:
 
 ```bash
 AZURE_AI_GATEWAY_ENDPOINT="https://<gateway-host-name>/"
+AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT="https://<gateway-host-name>/default/toolservers/<github-toolserver>/mcp"
 AZURE_AI_GATEWAY_API_KEY="<gateway-api-key>"
 AZURE_AI_GATEWAY_MODEL="gpt-latest"
 AZURE_AI_GATEWAY_MINI_MODEL="gpt-mini-latest"
 
-TOOLBOX_ENDPOINT="https://<foundry-toolbox-endpoint>"
+TOOLBOX_ENDPOINT="https://<foundry-project-endpoint>/toolboxes/repo-digest-tools/mcp?api-version=v1"
 TOOLBOX_NAME="repo-digest-tools"
 
 GITHUB_REPOSITORY="<owner>/<repository>"
 ```
+
+The Toolbox URL is the stable consumer endpoint. It omits
+`/versions/<version>` and always resolves the Toolbox default version.
 
 For direct local execution, `main.py` disables only Microsoft OpenTelemetry SDK
 self-telemetry when the Foundry hosting marker is absent. Hosted observability
@@ -470,6 +555,7 @@ uv run python -m compileall -q .
 uv run python -m unittest discover -s tests
 bash tests/test-apim-lifecycle.sh
 bash tests/test-ai-gateway-model-registration.sh
+bash tests/test-deployment-modes.sh
 az bicep build --file infra/foundry-agents/main.bicep
 az bicep build --file infra/ai-gateway/main.bicep
 az bicep build --file infra/foundry-models/main.bicep

@@ -146,3 +146,6 @@ Thumbs.db
 
 # Azure Developer CLI
 .azure/
+
+# Environment-specific AI Gateway Studio handoff
+.ai-gateway-studio.json

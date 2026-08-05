@@ -13,6 +13,20 @@ $deletedServiceApiVersion = "2024-05-01"
 $defaultAiGatewayLocation = "eastus2"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 
+function Invoke-Azd([string[]]$Arguments) {
+    $previousUserAgent = $env:AZURE_DEV_USER_AGENT
+    try {
+        $env:AZURE_DEV_USER_AGENT = "microsoft_foundry_skill"
+        & azd @Arguments
+    } finally {
+        if ($null -eq $previousUserAgent) {
+            Remove-Item Env:AZURE_DEV_USER_AGENT -ErrorAction SilentlyContinue
+        } else {
+            $env:AZURE_DEV_USER_AGENT = $previousUserAgent
+        }
+    }
+}
+
 function Get-IntegerSetting($Name, $Default) {
     $value = [Environment]::GetEnvironmentVariable($Name)
     if ([string]::IsNullOrWhiteSpace($value)) { $value = [string]$Default }
@@ -30,7 +44,7 @@ $operationTimeoutSeconds = Get-IntegerSetting "APIM_LIFECYCLE_OPERATION_TIMEOUT_
 $recentDeploymentLimit = Get-IntegerSetting "APIM_LIFECYCLE_RECENT_DEPLOYMENT_LIMIT" 10
 
 function Get-AzdValue($Name) {
-    $value = & azd env get-value $Name 2>$null
+    $value = Invoke-Azd @("env", "get-value", $Name) 2>$null
     if ($LASTEXITCODE -eq 0) { return ([string]$value).Trim() }
     return ""
 }
@@ -43,6 +57,15 @@ function First-Value([object[]]$Values) {
         }
     }
     return ""
+}
+
+$gatewayDeploymentMode = First-Value @($env:GATEWAY_DEPLOYMENT_MODE, (Get-AzdValue "GATEWAY_DEPLOYMENT_MODE"), "managed")
+if ($gatewayDeploymentMode -eq "existing") {
+    Write-Host "Existing AI Gateway mode: lifecycle recovery, deletion, and purge are disabled."
+    exit 0
+}
+if ($gatewayDeploymentMode -ne "managed") {
+    throw "AI Gateway lifecycle error: GATEWAY_DEPLOYMENT_MODE must be managed or existing."
 }
 
 function ConvertTo-LocationName($Location) {

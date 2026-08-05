@@ -5,6 +5,28 @@ targetScope = 'subscription'
 @description('azd environment name. Used for deterministic uniqueness and resource tagging.')
 param environmentName string = 'dailydigest'
 
+@allowed([
+  'managed'
+  'existing'
+])
+@description('AI Gateway ownership mode. managed preserves the full-stack sample deployment; existing consumes a gateway supplied by the operator.')
+param gatewayDeploymentMode string = 'managed'
+
+@description('Full ARM resource ID of the AI Gateway consumed when gatewayDeploymentMode is existing.')
+param existingGatewayResourceId string = ''
+
+@description('Nonsecret runtime endpoint of the AI Gateway consumed when gatewayDeploymentMode is existing.')
+param existingGatewayEndpoint string = ''
+
+@description('Nonsecret GitHub MCP endpoint already exposed by the existing AI Gateway.')
+param existingGatewayGitHubMcpEndpoint string = ''
+
+@description('Model alias accepted by the existing AI Gateway for the full model route.')
+param existingGatewayModelAlias string = ''
+
+@description('Model alias accepted by the existing AI Gateway for the efficient mini model route.')
+param existingGatewayMiniModelAlias string = ''
+
 @metadata({
   azd: {
     type: 'location'
@@ -117,6 +139,7 @@ param modelVersion string = '2026-07-09'
 var resourceToken = take(toLower(uniqueString(subscription().id, environmentName, location)), 8)
 var environmentLabel = toLower(environmentName)
 var tags = { 'azd-env-name': environmentName }
+var deployManagedGateway = gatewayDeploymentMode == 'managed'
 var effectiveGatewayResourceGroupName = !empty(gatewayResourceGroupName) ? gatewayResourceGroupName : 'rg-${environmentLabel}-${resourceToken}-gateway'
 var effectiveFoundryModelsResourceGroupName = !empty(foundryModelsResourceGroupName) ? foundryModelsResourceGroupName : 'rg-${environmentLabel}-${resourceToken}-foundrymodels'
 var effectiveFoundryAgentsResourceGroupName = !empty(foundryAgentsResourceGroupName) ? foundryAgentsResourceGroupName : 'rg-${environmentLabel}-${resourceToken}-foundryagents'
@@ -151,13 +174,13 @@ var gatewayModelDeployments = [
   }
 ]
 
-resource gatewayRg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
+resource gatewayRg 'Microsoft.Resources/resourceGroups@2021-04-01' = if (deployManagedGateway) {
   name: effectiveGatewayResourceGroupName
   location: location
   tags: tags
 }
 
-resource foundryModelsRg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
+resource foundryModelsRg 'Microsoft.Resources/resourceGroups@2021-04-01' = if (deployManagedGateway) {
   name: effectiveFoundryModelsResourceGroupName
   location: location
   tags: tags
@@ -169,7 +192,7 @@ resource foundryAgentsRg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   tags: tags
 }
 
-module foundryModels './foundry-models/main.bicep' = {
+module foundryModels './foundry-models/main.bicep' = if (deployManagedGateway) {
   name: 'foundry-models-${resourceToken}'
   scope: foundryModelsRg
   params: {
@@ -199,7 +222,7 @@ module foundryAgents './foundry-agents/main.bicep' = {
   }
 }
 
-module aiGateway './ai-gateway/main.bicep' = {
+module aiGateway './ai-gateway/main.bicep' = if (deployManagedGateway) {
   name: 'ai-gateway-${resourceToken}'
   scope: gatewayRg
   params: {
@@ -215,14 +238,14 @@ module aiGateway './ai-gateway/main.bicep' = {
     foundryProviderName: 'foundry'
     foundryProviderDisplayName: 'Foundry'
     foundryProviderDescription: 'Managed-identity Foundry provider for the deployments behind this sample.'
-    foundryEndpoint: foundryModels.outputs.aiServicesEndpoint
+    foundryEndpoint: foundryModels!.outputs.aiServicesEndpoint
     foundryResourceIds: [
-      foundryModels.outputs.aiServicesId
+      foundryModels!.outputs.aiServicesId
     ]
     foundryModels: [for (deployment, i) in gatewayModelDeployments: {
       armName: deployment.deploymentName
       description: deployment.description
-      resourceId: foundryModels.outputs.modelDeploymentIds[i]
+      resourceId: foundryModels!.outputs.modelDeploymentIds[i]
       modelName: deployment.modelName
       modelVersion: deployment.modelVersion
       tokenLimit: deployment.capacity * 1000
@@ -239,11 +262,12 @@ output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
 output RESOURCE_GROUP string = foundryAgentsRg.name
 output AZURE_RESOURCE_GROUP string = foundryAgentsRg.name
-output AI_GATEWAY_RESOURCE_GROUP string = gatewayRg.name
-output FOUNDRY_MODELS_RESOURCE_GROUP string = foundryModelsRg.name
+output GATEWAY_DEPLOYMENT_MODE string = gatewayDeploymentMode
+output AI_GATEWAY_RESOURCE_GROUP string = deployManagedGateway ? gatewayRg!.name : split(existingGatewayResourceId, '/')[4]
+output FOUNDRY_MODELS_RESOURCE_GROUP string = deployManagedGateway ? foundryModelsRg!.name : ''
 output FOUNDRY_AGENTS_RESOURCE_GROUP string = foundryAgentsRg.name
-output FOUNDRY_MODELS_RESOURCE_ID string = foundryModels.outputs.aiServicesId
-output FOUNDRY_MODELS_NAME string = foundryModels.outputs.aiServicesName
+output FOUNDRY_MODELS_RESOURCE_ID string = deployManagedGateway ? foundryModels!.outputs.aiServicesId : ''
+output FOUNDRY_MODELS_NAME string = deployManagedGateway ? foundryModels!.outputs.aiServicesName : ''
 output AI_SERVICES_NAME string = foundryAgents.outputs.aiServicesName
 output PROJECT_ENDPOINT string = foundryAgents.outputs.projectEndpoint
 output FOUNDRY_PROJECT_ENDPOINT string = foundryAgents.outputs.projectEndpoint
@@ -261,21 +285,22 @@ output FOUNDRY_APPLICATION_INSIGHTS_CONNECTION_NAME string = foundryAgents.outpu
 output GITHUB_REPOSITORY string = githubRepository
 output TOOLBOX_NAME string = 'repo-digest-tools'
 output ENABLE_AI_GATEWAY bool = true
-output AI_GATEWAY_NAME string = effectiveAiGatewayName
-output AI_GATEWAY_LOCATION string = aiGatewayLocation
-output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.apimGatewayId
-output AI_GATEWAY_CONNECTOR_NAMESPACE_RESOURCE_ID string = aiGateway.outputs.connectorNamespaceId
-output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = aiGateway.outputs.foundryUserRoleAssignmentName
-output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
-output APPLICATION_INSIGHTS_NAME string = aiGateway.outputs.appInsightsName
-output LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
-output LOG_ANALYTICS_WORKSPACE_NAME string = aiGateway.outputs.logAnalyticsWorkspaceName
-output AZURE_AI_GATEWAY_ENDPOINT string = 'https://${aiGateway.outputs.runtimeHostname}/'
-output AZURE_AI_GATEWAY_MODEL string = modelDeploymentName
-output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelDeploymentName
-output AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT string = modelDeploymentName
-output AI_GATEWAY_INTERNAL_MODEL_NAME string = modelName
-output AI_GATEWAY_INTERNAL_MODEL_VERSION string = modelVersion
-output AI_GATEWAY_INTERNAL_MINI_MODEL_DEPLOYMENT string = miniModelDeploymentName
-output AI_GATEWAY_INTERNAL_MINI_MODEL_NAME string = miniModelName
-output AI_GATEWAY_INTERNAL_MINI_MODEL_VERSION string = miniModelVersion
+output AI_GATEWAY_NAME string = deployManagedGateway ? effectiveAiGatewayName : last(split(existingGatewayResourceId, '/'))
+output AI_GATEWAY_LOCATION string = deployManagedGateway ? aiGatewayLocation : ''
+output AI_GATEWAY_RESOURCE_ID string = deployManagedGateway ? aiGateway!.outputs.apimGatewayId : existingGatewayResourceId
+output AI_GATEWAY_CONNECTOR_NAMESPACE_RESOURCE_ID string = deployManagedGateway ? aiGateway!.outputs.connectorNamespaceId : ''
+output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = deployManagedGateway ? aiGateway!.outputs.foundryUserRoleAssignmentName : ''
+output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = deployManagedGateway ? aiGateway!.outputs.gatewayPrincipalId : ''
+output APPLICATION_INSIGHTS_NAME string = deployManagedGateway ? aiGateway!.outputs.appInsightsName : ''
+output LOG_ANALYTICS_WORKSPACE_ID string = deployManagedGateway ? aiGateway!.outputs.logAnalyticsWorkspaceId : ''
+output LOG_ANALYTICS_WORKSPACE_NAME string = deployManagedGateway ? aiGateway!.outputs.logAnalyticsWorkspaceName : ''
+output AZURE_AI_GATEWAY_ENDPOINT string = deployManagedGateway ? 'https://${aiGateway!.outputs.runtimeHostname}/' : existingGatewayEndpoint
+output AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT string = deployManagedGateway ? 'https://${aiGateway!.outputs.runtimeHostname}/default/toolservers/github/mcp' : existingGatewayGitHubMcpEndpoint
+output AZURE_AI_GATEWAY_MODEL string = deployManagedGateway ? modelDeploymentName : existingGatewayModelAlias
+output AZURE_AI_GATEWAY_MINI_MODEL string = deployManagedGateway ? miniModelDeploymentName : existingGatewayMiniModelAlias
+output AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT string = deployManagedGateway ? modelDeploymentName : ''
+output AI_GATEWAY_INTERNAL_MODEL_NAME string = deployManagedGateway ? modelName : ''
+output AI_GATEWAY_INTERNAL_MODEL_VERSION string = deployManagedGateway ? modelVersion : ''
+output AI_GATEWAY_INTERNAL_MINI_MODEL_DEPLOYMENT string = deployManagedGateway ? miniModelDeploymentName : ''
+output AI_GATEWAY_INTERNAL_MINI_MODEL_NAME string = deployManagedGateway ? miniModelName : ''
+output AI_GATEWAY_INTERNAL_MINI_MODEL_VERSION string = deployManagedGateway ? miniModelVersion : ''

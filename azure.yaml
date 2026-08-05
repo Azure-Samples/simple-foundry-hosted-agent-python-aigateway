@@ -2,7 +2,7 @@
 
 requiredVersions:
     extensions:
-        azure.ai.agents: '>=0.1.34-preview'
+        azure.ai.agents: '>=1.0.0-beta.4'
         azure.ai.routines: '>=1.0.0-beta.1'
         microsoft.foundry: '>=1.0.0-beta.1'
 name: dailydigest
@@ -11,6 +11,17 @@ metadata:
 services:
     ai-project:
         host: azure.ai.project
+    ai-gateway-model:
+        host: azure.ai.connection
+        uses:
+            - ai-project
+        category: CustomKeys
+        target: ${AZURE_AI_GATEWAY_ENDPOINT}
+        authType: CustomKeys
+        credentials:
+            type: CustomKeys
+            keys:
+                Api-Key: ${AZURE_AI_GATEWAY_API_KEY}
     daily-repo-digest:
         host: azure.ai.routine
         uses:
@@ -34,6 +45,7 @@ services:
             remoteBuild: true
         uses:
             - ai-project
+            - ai-gateway-model
         config:
             startupCommand: uv run --frozen --no-dev python main.py
         container:
@@ -43,13 +55,13 @@ services:
         description: Daily repo digest agent hosted by Microsoft Foundry and routed through AI Gateway.
         environmentVariables:
             - name: AZURE_AI_GATEWAY_ENDPOINT
-              value: ${AZURE_AI_GATEWAY_ENDPOINT}
+              value: ${{connections.ai-gateway-model.target}}
             - name: AZURE_AI_GATEWAY_MODEL
               value: ${AZURE_AI_GATEWAY_MODEL}
             - name: AZURE_AI_GATEWAY_MINI_MODEL
               value: ${AZURE_AI_GATEWAY_MINI_MODEL}
             - name: AZURE_AI_GATEWAY_API_KEY
-              value: ${AZURE_AI_GATEWAY_API_KEY}
+              value: ${{connections.ai-gateway-model.credentials.Api-Key}}
             - name: TOOLBOX_ENDPOINT
               value: ${TOOLBOX_ENDPOINT}
             - name: TOOLBOX_NAME

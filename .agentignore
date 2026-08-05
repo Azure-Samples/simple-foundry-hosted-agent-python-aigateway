@@ -8,6 +8,7 @@ azure.yaml
 
 .env
 .env.*
+.ai-gateway-studio.json
 .azure/
 .git/
 

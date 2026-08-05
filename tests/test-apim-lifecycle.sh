@@ -47,6 +47,7 @@ if [ "${1:-}" = "env" ] && [ "${2:-}" = "get-value" ]; then
       printf '%s' "${STUB_GATEWAY_NAME:-aigw-abc12345}"
       ;;
     AI_GATEWAY_LOCATION) printf '%s' "${STUB_GATEWAY_LOCATION:-eastus2}" ;;
+    GATEWAY_DEPLOYMENT_MODE) printf '%s' "${STUB_GATEWAY_DEPLOYMENT_MODE:-managed}" ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -267,6 +268,18 @@ assert_file_value "$case_dir/live" 1
 [ ! -f "$case_dir/delete_count" ] || fail "healthy gateway was deleted"
 assert_contains "$output_file" "Preserving healthy environment-owned AI Gateway"
 
+new_case existing-mode-preserved
+printf '1' > "$case_dir/live"
+printf 'Failed' > "$case_dir/provisioning_state"
+STUB_GATEWAY_DEPLOYMENT_MODE=existing
+export STUB_GATEWAY_DEPLOYMENT_MODE
+run_lifecycle prepare
+unset STUB_GATEWAY_DEPLOYMENT_MODE
+assert_file_value "$case_dir/live" 1
+[ ! -f "$case_dir/delete_count" ] || fail "existing gateway was deleted"
+[ ! -f "$case_dir/purge_count" ] || fail "existing gateway was purged"
+assert_contains "$output_file" "lifecycle recovery, deletion, and purge are disabled"
+
 new_case failed-owned-discovered
 printf '1' > "$case_dir/live"
 printf 'Failed' > "$case_dir/provisioning_state"
@@ -436,5 +449,7 @@ assert_contains "$repo_root/azure.yaml" "manage-ai-gateway-lifecycle.sh cleanup"
 assert_contains "$repo_root/azure.yaml" "manage-ai-gateway-lifecycle.ps1 cleanup"
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.sh" "manage-ai-gateway-lifecycle.sh\" prepare"
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.ps1" "manage-ai-gateway-lifecycle.ps1\") prepare"
+assert_contains "$lifecycle_script" "GATEWAY_DEPLOYMENT_MODE"
+assert_contains "$powershell_script" "GATEWAY_DEPLOYMENT_MODE"
 
 echo "APIM lifecycle tests passed."

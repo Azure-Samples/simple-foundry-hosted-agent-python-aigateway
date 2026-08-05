@@ -7,6 +7,24 @@
     },
     "location": {
       "value": "${AZURE_LOCATION}"
+    },
+    "gatewayDeploymentMode": {
+      "value": "${GATEWAY_DEPLOYMENT_MODE=managed}"
+    },
+    "existingGatewayResourceId": {
+      "value": "${EXISTING_AI_GATEWAY_RESOURCE_ID=}"
+    },
+    "existingGatewayEndpoint": {
+      "value": "${AZURE_AI_GATEWAY_ENDPOINT=}"
+    },
+    "existingGatewayGitHubMcpEndpoint": {
+      "value": "${AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT=}"
+    },
+    "existingGatewayModelAlias": {
+      "value": "${AZURE_AI_GATEWAY_MODEL=}"
+    },
+    "existingGatewayMiniModelAlias": {
+      "value": "${AZURE_AI_GATEWAY_MINI_MODEL=}"
     }
   }
 }
