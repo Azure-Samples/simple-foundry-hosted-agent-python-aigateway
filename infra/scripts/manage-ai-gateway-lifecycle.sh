@@ -57,9 +57,13 @@ case "$mode" in
   *) usage; exit 2 ;;
 esac
 
+run_azd() {
+  AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd "$@"
+}
+
 azd_value() {
   local value
-  if value="$(azd env get-value "$1" 2>/dev/null)"; then
+  if value="$(run_azd env get-value "$1" 2>/dev/null)"; then
     printf '%s' "$value"
   fi
 }
@@ -73,6 +77,15 @@ first_value() {
     fi
   done
 }
+
+gateway_deployment_mode="$(first_value "${GATEWAY_DEPLOYMENT_MODE:-}" "$(azd_value GATEWAY_DEPLOYMENT_MODE)" "managed")"
+if [ "$gateway_deployment_mode" = "existing" ]; then
+  echo "Existing AI Gateway mode: lifecycle recovery, deletion, and purge are disabled."
+  exit 0
+fi
+if [ "$gateway_deployment_mode" != "managed" ]; then
+  fail "GATEWAY_DEPLOYMENT_MODE must be managed or existing."
+fi
 
 normalize_location() {
   printf '%s' "$1" | tr -d ' ' | tr '[:upper:]' '[:lower:]'

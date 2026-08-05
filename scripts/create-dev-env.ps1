@@ -14,10 +14,18 @@ if ((Test-Path $outputPath) -and -not $Force) {
 }
 
 function Get-AzdValue($Name) {
+    $previousUserAgent = $env:AZURE_DEV_USER_AGENT
     try {
+        $env:AZURE_DEV_USER_AGENT = "microsoft_foundry_skill"
         return ([string](azd env get-value $Name 2>$null)).Trim()
     } catch {
         return ""
+    } finally {
+        if ($null -eq $previousUserAgent) {
+            Remove-Item Env:AZURE_DEV_USER_AGENT -ErrorAction SilentlyContinue
+        } else {
+            $env:AZURE_DEV_USER_AGENT = $previousUserAgent
+        }
     }
 }
 
@@ -35,6 +43,7 @@ function Quote-EnvValue($Value) {
 }
 
 $endpoint = Require-AzdValue "AZURE_AI_GATEWAY_ENDPOINT"
+$githubMcpEndpoint = Require-AzdValue "AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT"
 $gatewayKey = Require-AzdValue "AZURE_AI_GATEWAY_API_KEY"
 $model = Require-AzdValue "AZURE_AI_GATEWAY_MODEL"
 $miniModel = Require-AzdValue "AZURE_AI_GATEWAY_MINI_MODEL"
@@ -47,6 +56,7 @@ if ([string]::IsNullOrWhiteSpace($repository)) {
 
 $lines = @(
     "AZURE_AI_GATEWAY_ENDPOINT=$(Quote-EnvValue $endpoint)"
+    "AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT=$(Quote-EnvValue $githubMcpEndpoint)"
     "AZURE_AI_GATEWAY_API_KEY=$(Quote-EnvValue $gatewayKey)"
     "AZURE_AI_GATEWAY_MODEL=$(Quote-EnvValue $model)"
     "AZURE_AI_GATEWAY_MINI_MODEL=$(Quote-EnvValue $miniModel)"

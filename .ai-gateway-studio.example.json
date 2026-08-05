@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "gatewayDeploymentMode": "existing",
+  "gatewayResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-gateway-rg/providers/Microsoft.ApiManagement/service/example-gateway",
+  "gatewayEndpoint": "https://example-gateway.example-region.ai.gateway-current.azure.com/",
+  "githubMcpEndpoint": "https://example-gateway.example-region.ai.gateway-current.azure.com/default/toolservers/github/mcp",
+  "modelAliases": {
+    "default": "gpt-latest",
+    "mini": "gpt-mini-latest"
+  }
+}

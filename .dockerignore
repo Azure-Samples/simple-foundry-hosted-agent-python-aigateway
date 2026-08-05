@@ -2,5 +2,6 @@
 __pycache__/
 *.pyc
 .env
+.ai-gateway-studio.json
 .azure/
 .git/

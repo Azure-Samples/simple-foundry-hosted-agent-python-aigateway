@@ -12,9 +12,13 @@ TOOLBOX_CONNECTION_NAME="aigw-github"
 TOOLBOX_NAME="repo-digest-tools"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+run_azd() {
+  AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd "$@"
+}
+
 azd_value() {
   local value
-  if value="$(azd env get-value "$1" 2>/dev/null)"; then
+  if value="$(run_azd env get-value "$1" 2>/dev/null)"; then
     printf '%s' "$value"
   fi
 }
@@ -53,12 +57,29 @@ PY
 }
 
 get_gateway_api_key_value() {
+  local gateway_id="$1"
+  local key_name
   local value
+
+  key_name="$(az rest \
+    --method get \
+    --uri "https://management.azure.com${gateway_id}/apiKeys?api-version=${AI_GATEWAY_API_VERSION}" \
+    --query "value[?properties.state=='active'].name | [0]" \
+    -o tsv 2>/dev/null || true)"
+  if [ -z "$key_name" ]; then
+    key_name="$(az rest \
+      --method get \
+      --uri "https://management.azure.com${gateway_id}/apiKeys?api-version=${AI_GATEWAY_API_VERSION}" \
+      --query "value[0].name" \
+      -o tsv 2>/dev/null || true)"
+  fi
+  [ -n "$key_name" ] || return 1
+
   if value="$(az rest \
     --method post \
-    --uri "https://management.azure.com${gateway_resource_id}/apiKeys/default/listSecrets?api-version=${AI_GATEWAY_API_VERSION}" \
+    --uri "https://management.azure.com${gateway_id}/apiKeys/${key_name}/listSecrets?api-version=${AI_GATEWAY_API_VERSION}" \
     --body '{}' \
-    --query "primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" \
+    --query "primaryKey || properties.primaryKey || primaryValue || properties.primaryValue || value" \
     -o tsv 2>/dev/null)" && [ -n "$value" ]; then
     printf '%s' "$value"
     return 0
@@ -66,9 +87,9 @@ get_gateway_api_key_value() {
 
   if value="$(az rest \
     --method post \
-    --uri "https://management.azure.com${gateway_resource_id}/apiKeys/default/listValues?api-version=${AI_GATEWAY_API_VERSION}" \
+    --uri "https://management.azure.com${gateway_id}/apiKeys/${key_name}/listValues?api-version=${AI_GATEWAY_API_VERSION}" \
     --body '{}' \
-    --query "primaryValue || properties.primaryValue || primaryKey || properties.primaryKey" \
+    --query "primaryValue || properties.primaryValue || primaryKey || properties.primaryKey || value" \
     -o tsv 2>/dev/null)" && [ -n "$value" ]; then
     printf '%s' "$value"
     return 0
@@ -197,9 +218,22 @@ prepare_bicep_rbac() {
     -o tsv)
 }
 
+gateway_deployment_mode="$(first_value "${GATEWAY_DEPLOYMENT_MODE:-}" "$(azd_value GATEWAY_DEPLOYMENT_MODE)" "managed")"
+case "$gateway_deployment_mode" in
+  managed|existing) ;;
+  *)
+    echo "GATEWAY_DEPLOYMENT_MODE must be managed or existing." >&2
+    exit 1
+    ;;
+esac
+
 if [ "${1:-}" = "--prepare-bicep" ]; then
-  bash "$REPO_ROOT/infra/scripts/manage-ai-gateway-lifecycle.sh" prepare
-  prepare_bicep_rbac
+  if [ "$gateway_deployment_mode" = "existing" ]; then
+    echo "Existing AI Gateway mode: skipping Gateway recovery and Bicep RBAC adoption."
+  else
+    bash "$REPO_ROOT/infra/scripts/manage-ai-gateway-lifecycle.sh" prepare
+    prepare_bicep_rbac
+  fi
   exit 0
 elif [ "$#" -gt 0 ]; then
   echo "Usage: $0 [--prepare-bicep]" >&2
@@ -212,17 +246,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Finishing the Bicep-provisioned AI Gateway with the local GitHub MCP credential."
+if [ "$gateway_deployment_mode" = "existing" ]; then
+  echo "Configuring Foundry to consume the existing AI Gateway."
+else
+  echo "Finishing the Bicep-provisioned AI Gateway with the local GitHub MCP credential."
+fi
 
 environment_name="$(require_value AZURE_ENV_NAME "$(first_value "${AZURE_ENV_NAME:-}" "$(azd_value AZURE_ENV_NAME)")")"
-subscription_id="$(require_value AZURE_SUBSCRIPTION_ID "$(first_value "${AZURE_SUBSCRIPTION_ID:-}" "$(azd_value AZURE_SUBSCRIPTION_ID)" "$(az account show --query id -o tsv)")")"
-resource_group="$(require_value AI_GATEWAY_RESOURCE_GROUP "$(first_value "${AI_GATEWAY_RESOURCE_GROUP:-}" "$(azd_value AI_GATEWAY_RESOURCE_GROUP)" "${RESOURCE_GROUP:-}" "${AZURE_RESOURCE_GROUP:-}" "$(azd_value RESOURCE_GROUP)" "$(azd_value AZURE_RESOURCE_GROUP)")")"
-gateway_name="$(require_value AI_GATEWAY_NAME "$(first_value "${AI_GATEWAY_NAME:-}" "$(azd_value AI_GATEWAY_NAME)")")"
 gateway_model="$(require_value AZURE_AI_GATEWAY_MODEL "$(first_value "${AZURE_AI_GATEWAY_MODEL:-}" "$(azd_value AZURE_AI_GATEWAY_MODEL)")")"
 gateway_mini_model="$(require_value AZURE_AI_GATEWAY_MINI_MODEL "$(first_value "${AZURE_AI_GATEWAY_MINI_MODEL:-}" "$(azd_value AZURE_AI_GATEWAY_MINI_MODEL)")")"
 github_repository="$(first_value "${GITHUB_REPOSITORY:-}" "$(azd_value GITHUB_REPOSITORY)" "$DEFAULT_REPOSITORY")"
 project_endpoint="$(require_value FOUNDRY_PROJECT_ENDPOINT "$(first_value "${FOUNDRY_PROJECT_ENDPOINT:-}" "$(azd_value FOUNDRY_PROJECT_ENDPOINT)")")"
 
+if [ "$gateway_deployment_mode" = "existing" ]; then
+  gateway_resource_id="$(require_value EXISTING_AI_GATEWAY_RESOURCE_ID "$(first_value "${EXISTING_AI_GATEWAY_RESOURCE_ID:-}" "$(azd_value EXISTING_AI_GATEWAY_RESOURCE_ID)" "$(azd_value AI_GATEWAY_RESOURCE_ID)")")"
+  case "$gateway_resource_id" in
+    /subscriptions/*/resourceGroups/*/providers/Microsoft.ApiManagement/service/* | \
+      /subscriptions/*/resourceGroups/*/providers/Microsoft.ApiManagement/aigateways/*) ;;
+    *)
+      echo "EXISTING_AI_GATEWAY_RESOURCE_ID must be a full AI Gateway ARM resource ID." >&2
+      exit 1
+      ;;
+  esac
+  gateway_url="$(require_value AZURE_AI_GATEWAY_ENDPOINT "$(first_value "${AZURE_AI_GATEWAY_ENDPOINT:-}" "$(azd_value AZURE_AI_GATEWAY_ENDPOINT)")")"
+  github_mcp_endpoint="$(require_value AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT "$(first_value "${AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT:-}" "$(azd_value AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT)")")"
+else
+subscription_id="$(require_value AZURE_SUBSCRIPTION_ID "$(first_value "${AZURE_SUBSCRIPTION_ID:-}" "$(azd_value AZURE_SUBSCRIPTION_ID)" "$(az account show --query id -o tsv)")")"
+resource_group="$(require_value AI_GATEWAY_RESOURCE_GROUP "$(first_value "${AI_GATEWAY_RESOURCE_GROUP:-}" "$(azd_value AI_GATEWAY_RESOURCE_GROUP)" "${RESOURCE_GROUP:-}" "${AZURE_RESOURCE_GROUP:-}" "$(azd_value RESOURCE_GROUP)" "$(azd_value AZURE_RESOURCE_GROUP)")")"
+gateway_name="$(require_value AI_GATEWAY_NAME "$(first_value "${AI_GATEWAY_NAME:-}" "$(azd_value AI_GATEWAY_NAME)")")"
 gateway_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}"
 legacy_gateway_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/aigateways/${gateway_name}"
 workspace_name="${AI_GATEWAY_WORKSPACE_NAME:-default}"
@@ -254,11 +305,14 @@ case "$identity_type" in
 esac
 
 gateway_url="$(require_value AZURE_AI_GATEWAY_ENDPOINT "$(az rest --method get --uri "$gateway_uri" --query properties.gatewayUrl -o tsv)")"
+github_mcp_endpoint="${gateway_url%/}/default/toolservers/github/mcp"
+fi
 case "$gateway_url" in
   */) ;;
   *) gateway_url="${gateway_url}/" ;;
 esac
 
+if [ "$gateway_deployment_mode" = "managed" ]; then
 workspace_children_ready=false
 for attempt in $(seq 1 30); do
   if az rest --method get --uri "https://management.azure.com${workspace_resource_id}/modelProviders?api-version=${AI_GATEWAY_API_VERSION}" -o none 2>/dev/null; then
@@ -347,26 +401,30 @@ az rest \
 rm -f "$tool_server_body"
 tool_server_body=""
 unset github_token github_authorization GITHUB_MCP_AUTHORIZATION
+else
+  echo "Existing AI Gateway mode: preserving its provider, models, keys, and GitHub ToolServer."
+fi
 
 saved_gateway_api_key="$(first_value "${AZURE_AI_GATEWAY_API_KEY:-}" "$(azd_value AZURE_AI_GATEWAY_API_KEY)")"
-if ! gateway_api_key="$(get_gateway_api_key_value)"; then
+if ! gateway_api_key="$(get_gateway_api_key_value "$gateway_resource_id")"; then
   gateway_api_key="$saved_gateway_api_key"
 fi
 gateway_api_key="$(require_value AZURE_AI_GATEWAY_API_KEY "$gateway_api_key")"
 
 verify_gateway_model_route "$gateway_url" "$gateway_model" "$gateway_api_key"
 
-azd env set AZURE_AI_GATEWAY_ENDPOINT "$gateway_url"
-azd env set AZURE_AI_GATEWAY_MODEL "$gateway_model"
-azd env set AZURE_AI_GATEWAY_MINI_MODEL "$gateway_mini_model"
-azd env set GITHUB_REPOSITORY "$github_repository"
-azd env set AZURE_AI_GATEWAY_API_KEY "$gateway_api_key" >/dev/null
-azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
+run_azd env set AZURE_AI_GATEWAY_ENDPOINT "$gateway_url"
+run_azd env set AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT "$github_mcp_endpoint"
+run_azd env set AZURE_AI_GATEWAY_MODEL "$gateway_model"
+run_azd env set AZURE_AI_GATEWAY_MINI_MODEL "$gateway_mini_model"
+run_azd env set GITHUB_REPOSITORY "$github_repository"
+run_azd env set AZURE_AI_GATEWAY_API_KEY "$gateway_api_key" >/dev/null
+run_azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
 
 echo "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
-azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
+run_azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
   --kind remote-tool \
-  --target "${gateway_url%/}/default/toolservers/github/mcp" \
+  --target "$github_mcp_endpoint" \
   --auth-type custom-keys \
   --custom-key "Api-Key=${gateway_api_key}" \
   --force \
@@ -374,19 +432,19 @@ azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
   --project-endpoint "$project_endpoint" \
   -o json >/dev/null
 
-if ! toolbox_json="$(azd ai toolbox show "$TOOLBOX_NAME" \
+if ! run_azd ai toolbox show "$TOOLBOX_NAME" \
   --no-prompt \
   --project-endpoint "$project_endpoint" \
-  -o json 2>/dev/null)"; then
+  -o json >/dev/null 2>&1; then
   echo "Creating the Foundry Toolbox."
-  toolbox_json="$(azd ai toolbox create "$TOOLBOX_NAME" \
+  run_azd ai toolbox create "$TOOLBOX_NAME" \
     --from-file "$REPO_ROOT/toolbox.yaml" \
     --no-prompt \
     --project-endpoint "$project_endpoint" \
-    -o json)"
+    -o json >/dev/null
 fi
-toolbox_endpoint="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["endpoint"])' <<< "$toolbox_json")"
-azd env set TOOLBOX_ENDPOINT "$toolbox_endpoint"
+toolbox_endpoint="${project_endpoint%/}/toolboxes/${TOOLBOX_NAME}/mcp?api-version=v1"
+run_azd env set TOOLBOX_ENDPOINT "$toolbox_endpoint"
 remove_azd_env_values \
   AI_SERVICES_NAME \
   AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT \
@@ -416,4 +474,8 @@ remove_azd_env_values \
   GITHUB_TOKEN \
   FOUNDRY_API_KEY
 
-echo "AI Gateway setup complete. Bicep owns Azure resources; this hook injects the GitHub credential, connects Foundry Toolbox to AI Gateway, and saves the runtime key."
+if [ "$gateway_deployment_mode" = "existing" ]; then
+  echo "Existing AI Gateway setup complete. The hook changed only Foundry project connections and Toolbox configuration."
+else
+  echo "AI Gateway setup complete. Bicep owns Azure resources; this hook injects the GitHub credential, connects Foundry Toolbox to AI Gateway, and saves the runtime key."
+fi

@@ -17,7 +17,7 @@ if [ -e "$output" ] && [ "$force" != true ]; then
 fi
 
 azd_value() {
-  azd env get-value "$1" 2>/dev/null || true
+  AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd env get-value "$1" 2>/dev/null || true
 }
 
 require_azd_value() {
@@ -39,6 +39,7 @@ quote_env() {
 }
 
 endpoint="$(require_azd_value AZURE_AI_GATEWAY_ENDPOINT)"
+github_mcp_endpoint="$(require_azd_value AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT)"
 key="$(require_azd_value AZURE_AI_GATEWAY_API_KEY)"
 model="$(require_azd_value AZURE_AI_GATEWAY_MODEL)"
 mini_model="$(require_azd_value AZURE_AI_GATEWAY_MINI_MODEL)"
@@ -53,6 +54,7 @@ trap 'rm -f "$temp_file"' EXIT
 
 {
   printf 'AZURE_AI_GATEWAY_ENDPOINT=%s\n' "$(quote_env "$endpoint")"
+  printf 'AZURE_AI_GATEWAY_GITHUB_MCP_ENDPOINT=%s\n' "$(quote_env "$github_mcp_endpoint")"
   printf 'AZURE_AI_GATEWAY_API_KEY=%s\n' "$(quote_env "$key")"
   printf 'AZURE_AI_GATEWAY_MODEL=%s\n' "$(quote_env "$model")"
   printf 'AZURE_AI_GATEWAY_MINI_MODEL=%s\n' "$(quote_env "$mini_model")"
