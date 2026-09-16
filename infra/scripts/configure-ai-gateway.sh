@@ -5,6 +5,9 @@ umask 077
 AI_GATEWAY_API_VERSION="2025-09-01-preview"
 LEGACY_AI_GATEWAY_API_VERSION="2026-05-01"
 FOUNDRY_USER_ROLE_ID="53ca6127-db72-4b80-b1b0-d745d6d5456d"
+MONITORING_METRICS_PUBLISHER_ROLE_ID="3913510d-42f4-4e42-8a64-420c390055eb"
+MONITOR_MANAGED_IDENTITY_AUDIENCE="https://monitor.azure.com"
+APP_INSIGHTS_OTLP_API_VERSION="2024-02-01"
 DEFAULT_REPOSITORY="microsoft/agent-framework"
 GITHUB_MCP_SERVER="https://api.githubcopilot.com/mcp/"
 GITHUB_MCP_TOOLS="list_pull_requests,list_issues,actions_list"
@@ -197,9 +200,141 @@ prepare_bicep_rbac() {
     -o tsv)
 }
 
+register_monitor_provider() {
+  local registration_state
+  registration_state="$(az provider show --namespace Microsoft.Monitor --query registrationState -o tsv 2>/dev/null || true)"
+  if [ "$registration_state" = "Registered" ]; then
+    return 0
+  fi
+  echo "Registering the Microsoft.Monitor resource provider for AI Gateway OpenTelemetry monitoring."
+  az provider register --namespace Microsoft.Monitor --wait
+}
+
+migrate_legacy_telemetry_exporter() {
+  local subscription_id
+  local resource_group
+  local gateway_name
+  local workspace_name
+  local exporter_name
+  local exporter_uri
+  local existing_kind
+
+  subscription_id="$(first_value "${AZURE_SUBSCRIPTION_ID:-}" "$(azd_value AZURE_SUBSCRIPTION_ID)" "$(az account show --query id -o tsv 2>/dev/null || true)")"
+  resource_group="$(first_value "${AI_GATEWAY_RESOURCE_GROUP:-}" "$(azd_value AI_GATEWAY_RESOURCE_GROUP)" "${RESOURCE_GROUP:-}" "${AZURE_RESOURCE_GROUP:-}" "$(azd_value RESOURCE_GROUP)" "$(azd_value AZURE_RESOURCE_GROUP)")"
+  gateway_name="$(first_value "${AI_GATEWAY_NAME:-}" "$(azd_value AI_GATEWAY_NAME)")"
+  workspace_name="${AI_GATEWAY_WORKSPACE_NAME:-default}"
+  exporter_name="$(first_value "${AI_GATEWAY_TELEMETRY_EXPORTER_NAME:-}" "$(azd_value AI_GATEWAY_TELEMETRY_EXPORTER_NAME)" "appinsights")"
+  if [ -z "$subscription_id" ] || [ -z "$resource_group" ] || [ -z "$gateway_name" ]; then
+    return 0
+  fi
+
+  exporter_uri="https://management.azure.com/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}/workspaces/${workspace_name}/telemetryExporters/${exporter_name}?api-version=${AI_GATEWAY_API_VERSION}"
+  existing_kind="$(az rest --method get --uri "$exporter_uri" --query properties.kind -o tsv 2>/dev/null || true)"
+  if [ "$existing_kind" = "applicationInsights" ]; then
+    # The exporter "kind" is immutable, so an existing legacy applicationInsights
+    # exporter must be deleted before it can be recreated as OpenTelemetry.
+    echo "Deleting the legacy applicationInsights telemetry exporter; exporter kind is immutable and requires delete/recreate to migrate to OpenTelemetry."
+    az rest --method delete --uri "$exporter_uri" -o none
+  fi
+}
+
+configure_telemetry_exporter() {
+  local app_insights_id
+  local app_insights_uri
+  local exporter_name
+  local principal_id
+  local metrics_endpoint=""
+  local logs_endpoint=""
+  local traces_endpoint=""
+  local dcr_id=""
+  local exporter_body_file
+  local attempt
+
+  app_insights_id="$(first_value "${AI_GATEWAY_APPLICATION_INSIGHTS_ID:-}" "$(azd_value AI_GATEWAY_APPLICATION_INSIGHTS_ID)")"
+  if [ -z "$app_insights_id" ]; then
+    echo "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter configuration."
+    return 0
+  fi
+
+  exporter_name="$(first_value "${AI_GATEWAY_TELEMETRY_EXPORTER_NAME:-}" "$(azd_value AI_GATEWAY_TELEMETRY_EXPORTER_NAME)" "appinsights")"
+  principal_id="$(first_value "${AI_GATEWAY_PRINCIPAL_ID:-}" "$(azd_value AI_GATEWAY_PRINCIPAL_ID)")"
+  app_insights_uri="https://management.azure.com${app_insights_id}?api-version=${APP_INSIGHTS_OTLP_API_VERSION}"
+
+  echo "Waiting for Application Insights to generate its managed DCR/DCE and OTLP ingestion endpoints."
+  for attempt in $(seq 1 30); do
+    metrics_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.MetricsIngestionEndpoint || properties.metricsIngestionEndpoint" -o tsv 2>/dev/null || true)"
+    logs_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.LogsIngestionEndpoint || properties.logsIngestionEndpoint" -o tsv 2>/dev/null || true)"
+    traces_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.TracesIngestionEndpoint || properties.tracesIngestionEndpoint" -o tsv 2>/dev/null || true)"
+    dcr_id="$(az rest --method get --uri "$app_insights_uri" --query "properties.MetricsIngestionDataCollectionRuleId || properties.metricsIngestionDataCollectionRuleId" -o tsv 2>/dev/null || true)"
+    if [ -n "$metrics_endpoint" ] && [ -n "$logs_endpoint" ]; then
+      break
+    fi
+    echo "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=${attempt}"
+    sleep 10
+  done
+
+  if [ -z "$metrics_endpoint" ] || [ -z "$logs_endpoint" ]; then
+    echo "Application Insights did not expose OTLP ingestion endpoints in time; leaving the AI Gateway telemetry exporter unconfigured." >&2
+    return 0
+  fi
+
+  exporter_body_file="$(mktemp)"
+  python3 - "$app_insights_id" "$metrics_endpoint" "$logs_endpoint" "$traces_endpoint" "$MONITOR_MANAGED_IDENTITY_AUDIENCE" > "$exporter_body_file" <<'PY'
+import json
+import sys
+
+resource_id, metrics_endpoint, logs_endpoint, traces_endpoint, audience = sys.argv[1:6]
+open_telemetry = {
+    "resourceId": resource_id,
+    "metricsEndpoint": metrics_endpoint,
+    "logsEndpoint": logs_endpoint,
+    "authentication": {
+        "kind": "ManagedIdentity",
+        "managedIdentity": {"resource": audience},
+    },
+}
+if traces_endpoint:
+    open_telemetry["tracesEndpoint"] = traces_endpoint
+
+print(json.dumps({
+    "properties": {
+        "kind": "OpenTelemetry",
+        "payloadCapture": False,
+        "openTelemetry": open_telemetry,
+    }
+}))
+PY
+
+  echo "Configuring the AI Gateway OpenTelemetry exporter."
+  az rest \
+    --method put \
+    --uri "https://management.azure.com${workspace_resource_id}/telemetryExporters/${exporter_name}?api-version=${AI_GATEWAY_API_VERSION}" \
+    --body @"$exporter_body_file" \
+    -o none
+  rm -f "$exporter_body_file"
+
+  if [ -n "$principal_id" ] && [ -n "$dcr_id" ]; then
+    echo "Assigning the Monitoring Metrics Publisher role to the AI Gateway identity at the generated Data Collection Rule scope."
+    # The generated DCR lives in a managed resource group with a deny
+    # assignment that blocks a nested ARM/Bicep role assignment; a direct
+    # role-assignment call from this postprovision hook works instead.
+    az role assignment create \
+      --assignee-object-id "$principal_id" \
+      --assignee-principal-type ServicePrincipal \
+      --role "$MONITORING_METRICS_PUBLISHER_ROLE_ID" \
+      --scope "$dcr_id" \
+      -o none 2>/dev/null ||
+      echo "The Monitoring Metrics Publisher role assignment already exists or could not be created; continuing." >&2
+  else
+    echo "Application Insights did not report the generated Data Collection Rule ID; skipping the Monitoring Metrics Publisher role assignment." >&2
+  fi
+}
+
 if [ "${1:-}" = "--prepare-bicep" ]; then
   bash "$REPO_ROOT/infra/scripts/manage-ai-gateway-lifecycle.sh" prepare
+  register_monitor_provider
   prepare_bicep_rbac
+  migrate_legacy_telemetry_exporter
   exit 0
 elif [ "$#" -gt 0 ]; then
   echo "Usage: $0 [--prepare-bicep]" >&2
@@ -282,6 +417,8 @@ if [ "$provider_auth" != "ManagedIdentity" ]; then
   echo "Bicep did not configure the Foundry provider for managed identity." >&2
   exit 1
 fi
+
+configure_telemetry_exporter
 
 remove_azd_env_values GITHUB_MCP_TOKEN GITHUB_TOKEN
 github_token=""
