@@ -238,7 +238,7 @@ function Remove-LegacyTelemetryExporter {
     }
 }
 
-function Configure-TelemetryExporter($WorkspaceResourceId) {
+function Set-TelemetryExporter($WorkspaceResourceId) {
     $appInsightsId = First-Value @($env:AI_GATEWAY_APPLICATION_INSIGHTS_ID, (Get-AzdValue "AI_GATEWAY_APPLICATION_INSIGHTS_ID"))
     if ([string]::IsNullOrWhiteSpace($appInsightsId)) {
         Write-Host "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter configuration."
@@ -402,7 +402,7 @@ if ($providerAuth -ne "ManagedIdentity") {
     throw "Bicep did not configure the Foundry provider for managed identity."
 }
 
-Configure-TelemetryExporter $workspaceResourceId
+Set-TelemetryExporter $workspaceResourceId
 
 Remove-AzdEnvValues @("GITHUB_MCP_TOKEN", "GITHUB_TOKEN")
 $githubToken = ""

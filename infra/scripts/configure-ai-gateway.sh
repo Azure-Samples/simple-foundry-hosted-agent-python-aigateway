@@ -252,7 +252,6 @@ configure_telemetry_exporter() {
   local logs_endpoint=""
   local traces_endpoint=""
   local dcr_id=""
-  local exporter_body_file
   local attempt
 
   app_insights_id="$(first_value "${AI_GATEWAY_APPLICATION_INSIGHTS_ID:-}" "$(azd_value AI_GATEWAY_APPLICATION_INSIGHTS_ID)")"
@@ -332,6 +331,7 @@ PY
     --body @"$exporter_body_file" \
     -o none
   rm -f "$exporter_body_file"
+  exporter_body_file=""
 
   if [ -n "$principal_id" ] && [ -n "$dcr_id" ]; then
     echo "Assigning the Monitoring Metrics Publisher role to the AI Gateway identity at the generated Data Collection Rule scope."
@@ -373,8 +373,9 @@ elif [ "$#" -gt 0 ]; then
 fi
 
 tool_server_body=""
+exporter_body_file=""
 cleanup() {
-  rm -f "$tool_server_body"
+  rm -f "$tool_server_body" "$exporter_body_file"
 }
 trap cleanup EXIT
 
