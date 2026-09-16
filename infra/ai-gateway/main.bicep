@@ -98,6 +98,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableMoni
     // resource is created, so the telemetry exporter itself cannot be created
     // in the same Bicep deployment; the postprovision hook configures it once
     // the endpoints are available (see infra/scripts/configure-ai-gateway.sh).
+    // This property is valid at runtime but is not yet reflected in the
+    // Bicep/ARM type definitions for this API version, hence the suppression.
     #disable-next-line BCP037
     AzureMonitorWorkspaceIngestionMode: 'Enabled'
   }

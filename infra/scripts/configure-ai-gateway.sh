@@ -8,6 +8,8 @@ FOUNDRY_USER_ROLE_ID="53ca6127-db72-4b80-b1b0-d745d6d5456d"
 MONITORING_METRICS_PUBLISHER_ROLE_ID="3913510d-42f4-4e42-8a64-420c390055eb"
 MONITOR_MANAGED_IDENTITY_AUDIENCE="https://monitor.azure.com"
 APP_INSIGHTS_OTLP_API_VERSION="2024-02-01"
+OTLP_POLL_MAX_ATTEMPTS=30
+OTLP_POLL_INTERVAL_SECONDS=10
 DEFAULT_REPOSITORY="microsoft/agent-framework"
 GITHUB_MCP_SERVER="https://api.githubcopilot.com/mcp/"
 GITHUB_MCP_TOOLS="list_pull_requests,list_issues,actions_list"
@@ -268,7 +270,7 @@ configure_telemetry_exporter() {
   app_insights_uri="https://management.azure.com${app_insights_id}?api-version=${APP_INSIGHTS_OTLP_API_VERSION}"
 
   echo "Waiting for Application Insights to generate its managed DCR/DCE and OTLP ingestion endpoints."
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "$OTLP_POLL_MAX_ATTEMPTS"); do
     app_insights_json="$(az rest --method get --uri "$app_insights_uri" -o json 2>/dev/null || true)"
     if [ -n "$app_insights_json" ]; then
       parsed_endpoints="$(python3 -c '
@@ -288,7 +290,7 @@ print("\t".join(fields))
       break
     fi
     echo "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=${attempt}"
-    sleep 10
+    sleep "$OTLP_POLL_INTERVAL_SECONDS"
   done
 
   if [ -z "$metrics_endpoint" ] || [ -z "$logs_endpoint" ]; then

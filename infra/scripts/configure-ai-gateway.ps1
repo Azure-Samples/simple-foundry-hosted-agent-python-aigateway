@@ -7,6 +7,8 @@ $foundryUserRoleId = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
 $monitoringMetricsPublisherRoleId = "3913510d-42f4-4e42-8a64-420c390055eb"
 $monitorManagedIdentityAudience = "https://monitor.azure.com"
 $appInsightsOtlpApiVersion = "2024-02-01"
+$otlpPollMaxAttempts = 30
+$otlpPollIntervalSeconds = 10
 $defaultRepository = "microsoft/agent-framework"
 $githubMcpServer = "https://api.githubcopilot.com/mcp/"
 $githubMcpTools = "list_pull_requests,list_issues,actions_list"
@@ -242,6 +244,10 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
         Write-Host "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter configuration."
         return
     }
+    if ([string]::IsNullOrWhiteSpace($WorkspaceResourceId)) {
+        Write-Warning "AI Gateway workspace resource ID is unavailable; skipping OpenTelemetry exporter configuration."
+        return
+    }
 
     $exporterName = First-Value @($env:AI_GATEWAY_TELEMETRY_EXPORTER_NAME, (Get-AzdValue "AI_GATEWAY_TELEMETRY_EXPORTER_NAME"), "appinsights")
     $principalId = First-Value @($env:AI_GATEWAY_PRINCIPAL_ID, (Get-AzdValue "AI_GATEWAY_PRINCIPAL_ID"))
@@ -252,7 +258,7 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
     $logsEndpoint = ""
     $tracesEndpoint = ""
     $dcrId = ""
-    for ($attempt = 1; $attempt -le 30; $attempt++) {
+    for ($attempt = 1; $attempt -le $otlpPollMaxAttempts; $attempt++) {
         $appInsightsJson = [string](az rest --method get --uri $appInsightsUri -o json 2>$null)
         if (-not [string]::IsNullOrWhiteSpace($appInsightsJson)) {
             $props = ($appInsightsJson | ConvertFrom-Json).properties
@@ -265,7 +271,7 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
             break
         }
         Write-Host "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=$attempt"
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds $otlpPollIntervalSeconds
     }
 
     if ([string]::IsNullOrWhiteSpace($metricsEndpoint) -or [string]::IsNullOrWhiteSpace($logsEndpoint)) {
