@@ -242,6 +242,8 @@ configure_telemetry_exporter() {
   local workspace_resource_id="$1"
   local app_insights_id
   local app_insights_uri
+  local app_insights_json
+  local parsed_endpoints
   local exporter_name
   local principal_id
   local metrics_endpoint=""
@@ -267,10 +269,21 @@ configure_telemetry_exporter() {
 
   echo "Waiting for Application Insights to generate its managed DCR/DCE and OTLP ingestion endpoints."
   for attempt in $(seq 1 30); do
-    metrics_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.MetricsIngestionEndpoint || properties.metricsIngestionEndpoint" -o tsv 2>/dev/null || true)"
-    logs_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.LogsIngestionEndpoint || properties.logsIngestionEndpoint" -o tsv 2>/dev/null || true)"
-    traces_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.TracesIngestionEndpoint || properties.tracesIngestionEndpoint" -o tsv 2>/dev/null || true)"
-    dcr_id="$(az rest --method get --uri "$app_insights_uri" --query "properties.MetricsIngestionDataCollectionRuleId || properties.metricsIngestionDataCollectionRuleId" -o tsv 2>/dev/null || true)"
+    app_insights_json="$(az rest --method get --uri "$app_insights_uri" -o json 2>/dev/null || true)"
+    if [ -n "$app_insights_json" ]; then
+      parsed_endpoints="$(python3 -c '
+import json, sys
+p = json.load(sys.stdin).get("properties", {})
+fields = [
+    p.get("MetricsIngestionEndpoint") or p.get("metricsIngestionEndpoint") or "",
+    p.get("LogsIngestionEndpoint") or p.get("logsIngestionEndpoint") or "",
+    p.get("TracesIngestionEndpoint") or p.get("tracesIngestionEndpoint") or "",
+    p.get("MetricsIngestionDataCollectionRuleId") or p.get("metricsIngestionDataCollectionRuleId") or "",
+]
+print("\t".join(fields))
+' <<< "$app_insights_json")"
+      IFS=$'\t' read -r metrics_endpoint logs_endpoint traces_endpoint dcr_id <<< "$parsed_endpoints"
+    fi
     if [ -n "$metrics_endpoint" ] && [ -n "$logs_endpoint" ] && [ -n "$dcr_id" ]; then
       break
     fi
@@ -323,13 +336,24 @@ PY
     # The generated DCR lives in a managed resource group with a deny
     # assignment that blocks a nested ARM/Bicep role assignment; a direct
     # role-assignment call from this postprovision hook works instead.
-    az role assignment create \
+    local role_assignment_error
+    role_assignment_error="$(az role assignment create \
       --assignee-object-id "$principal_id" \
       --assignee-principal-type ServicePrincipal \
       --role "$MONITORING_METRICS_PUBLISHER_ROLE_ID" \
       --scope "$dcr_id" \
-      -o none 2>/dev/null ||
-      echo "The Monitoring Metrics Publisher role assignment already exists or could not be created; continuing." >&2
+      -o none 2>&1)" && role_assignment_error=""
+    if [ -n "$role_assignment_error" ]; then
+      case "$role_assignment_error" in
+        *RoleAssignmentExists*|*"already exists"*)
+          echo "The Monitoring Metrics Publisher role assignment already exists; continuing."
+          ;;
+        *)
+          echo "Failed to assign the Monitoring Metrics Publisher role: $role_assignment_error" >&2
+          return 1
+          ;;
+      esac
+    fi
   else
     echo "Application Insights did not report the generated Data Collection Rule ID; skipping the Monitoring Metrics Publisher role assignment." >&2
   fi

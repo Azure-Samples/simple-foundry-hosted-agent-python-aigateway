@@ -253,10 +253,14 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
     $tracesEndpoint = ""
     $dcrId = ""
     for ($attempt = 1; $attempt -le 30; $attempt++) {
-        $metricsEndpoint = [string](az rest --method get --uri $appInsightsUri --query "properties.MetricsIngestionEndpoint || properties.metricsIngestionEndpoint" -o tsv 2>$null)
-        $logsEndpoint = [string](az rest --method get --uri $appInsightsUri --query "properties.LogsIngestionEndpoint || properties.logsIngestionEndpoint" -o tsv 2>$null)
-        $tracesEndpoint = [string](az rest --method get --uri $appInsightsUri --query "properties.TracesIngestionEndpoint || properties.tracesIngestionEndpoint" -o tsv 2>$null)
-        $dcrId = [string](az rest --method get --uri $appInsightsUri --query "properties.MetricsIngestionDataCollectionRuleId || properties.metricsIngestionDataCollectionRuleId" -o tsv 2>$null)
+        $appInsightsJson = [string](az rest --method get --uri $appInsightsUri -o json 2>$null)
+        if (-not [string]::IsNullOrWhiteSpace($appInsightsJson)) {
+            $props = ($appInsightsJson | ConvertFrom-Json).properties
+            $metricsEndpoint = First-Value @($props.MetricsIngestionEndpoint, $props.metricsIngestionEndpoint)
+            $logsEndpoint = First-Value @($props.LogsIngestionEndpoint, $props.logsIngestionEndpoint)
+            $tracesEndpoint = First-Value @($props.TracesIngestionEndpoint, $props.tracesIngestionEndpoint)
+            $dcrId = First-Value @($props.MetricsIngestionDataCollectionRuleId, $props.metricsIngestionDataCollectionRuleId)
+        }
         if (-not [string]::IsNullOrWhiteSpace($metricsEndpoint) -and -not [string]::IsNullOrWhiteSpace($logsEndpoint) -and -not [string]::IsNullOrWhiteSpace($dcrId)) {
             break
         }
@@ -304,9 +308,14 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
                 --assignee-principal-type ServicePrincipal `
                 --role $monitoringMetricsPublisherRoleId `
                 --scope $dcrId `
-                -o none 2>$null
+                -o none
         } catch {
-            Write-Warning "The Monitoring Metrics Publisher role assignment already exists or could not be created; continuing."
+            $errorText = $_.Exception.Message
+            if ($errorText -match "RoleAssignmentExists" -or $errorText -match "already exists") {
+                Write-Host "The Monitoring Metrics Publisher role assignment already exists; continuing."
+            } else {
+                throw "Failed to assign the Monitoring Metrics Publisher role: $errorText"
+            }
         }
     } else {
         Write-Warning "Application Insights did not report the generated Data Collection Rule ID; skipping the Monitoring Metrics Publisher role assignment."
