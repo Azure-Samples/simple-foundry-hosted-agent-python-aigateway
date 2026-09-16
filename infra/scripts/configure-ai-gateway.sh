@@ -239,6 +239,7 @@ migrate_legacy_telemetry_exporter() {
 }
 
 configure_telemetry_exporter() {
+  local workspace_resource_id="$1"
   local app_insights_id
   local app_insights_uri
   local exporter_name
@@ -255,6 +256,10 @@ configure_telemetry_exporter() {
     echo "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter configuration."
     return 0
   fi
+  if [ -z "$workspace_resource_id" ]; then
+    echo "AI Gateway workspace resource ID is unavailable; skipping OpenTelemetry exporter configuration." >&2
+    return 0
+  fi
 
   exporter_name="$(first_value "${AI_GATEWAY_TELEMETRY_EXPORTER_NAME:-}" "$(azd_value AI_GATEWAY_TELEMETRY_EXPORTER_NAME)" "appinsights")"
   principal_id="$(first_value "${AI_GATEWAY_PRINCIPAL_ID:-}" "$(azd_value AI_GATEWAY_PRINCIPAL_ID)")"
@@ -266,7 +271,7 @@ configure_telemetry_exporter() {
     logs_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.LogsIngestionEndpoint || properties.logsIngestionEndpoint" -o tsv 2>/dev/null || true)"
     traces_endpoint="$(az rest --method get --uri "$app_insights_uri" --query "properties.TracesIngestionEndpoint || properties.tracesIngestionEndpoint" -o tsv 2>/dev/null || true)"
     dcr_id="$(az rest --method get --uri "$app_insights_uri" --query "properties.MetricsIngestionDataCollectionRuleId || properties.metricsIngestionDataCollectionRuleId" -o tsv 2>/dev/null || true)"
-    if [ -n "$metrics_endpoint" ] && [ -n "$logs_endpoint" ]; then
+    if [ -n "$metrics_endpoint" ] && [ -n "$logs_endpoint" ] && [ -n "$dcr_id" ]; then
       break
     fi
     echo "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=${attempt}"
@@ -418,7 +423,7 @@ if [ "$provider_auth" != "ManagedIdentity" ]; then
   exit 1
 fi
 
-configure_telemetry_exporter
+configure_telemetry_exporter "$workspace_resource_id"
 
 remove_azd_env_values GITHUB_MCP_TOKEN GITHUB_TOKEN
 github_token=""

@@ -257,7 +257,7 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
         $logsEndpoint = [string](az rest --method get --uri $appInsightsUri --query "properties.LogsIngestionEndpoint || properties.logsIngestionEndpoint" -o tsv 2>$null)
         $tracesEndpoint = [string](az rest --method get --uri $appInsightsUri --query "properties.TracesIngestionEndpoint || properties.tracesIngestionEndpoint" -o tsv 2>$null)
         $dcrId = [string](az rest --method get --uri $appInsightsUri --query "properties.MetricsIngestionDataCollectionRuleId || properties.metricsIngestionDataCollectionRuleId" -o tsv 2>$null)
-        if (-not [string]::IsNullOrWhiteSpace($metricsEndpoint) -and -not [string]::IsNullOrWhiteSpace($logsEndpoint)) {
+        if (-not [string]::IsNullOrWhiteSpace($metricsEndpoint) -and -not [string]::IsNullOrWhiteSpace($logsEndpoint) -and -not [string]::IsNullOrWhiteSpace($dcrId)) {
             break
         }
         Write-Host "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=$attempt"
