@@ -211,7 +211,7 @@ function Register-MonitorProvider {
     az provider register --namespace Microsoft.Monitor --wait
 }
 
-function Migrate-LegacyTelemetryExporter {
+function Remove-LegacyTelemetryExporter {
     $subscriptionId = First-Value @($env:AZURE_SUBSCRIPTION_ID, (Get-AzdValue "AZURE_SUBSCRIPTION_ID"), (az account show --query id -o tsv 2>$null))
     $resourceGroup = First-Value @($env:AI_GATEWAY_RESOURCE_GROUP, (Get-AzdValue "AI_GATEWAY_RESOURCE_GROUP"), $env:RESOURCE_GROUP, $env:AZURE_RESOURCE_GROUP, (Get-AzdValue "RESOURCE_GROUP"), (Get-AzdValue "AZURE_RESOURCE_GROUP"))
     $gatewayName = First-Value @($env:AI_GATEWAY_NAME, (Get-AzdValue "AI_GATEWAY_NAME"))
@@ -308,6 +308,8 @@ function Configure-TelemetryExporter($WorkspaceResourceId) {
         # The generated DCR lives in a managed resource group with a deny
         # assignment that blocks a nested ARM/Bicep role assignment; a direct
         # role-assignment call from this postprovision hook works instead.
+        # A non-zero exit from az becomes a terminating error here because of
+        # the script-level $ErrorActionPreference / $PSNativeCommandUseErrorActionPreference.
         try {
             az role assignment create `
                 --assignee-object-id $principalId `
@@ -333,7 +335,7 @@ if ($mode -eq "--prepare-bicep") {
     & (Join-Path $PSScriptRoot "manage-ai-gateway-lifecycle.ps1") prepare
     Register-MonitorProvider
     Prepare-BicepRbac
-    Migrate-LegacyTelemetryExporter
+    Remove-LegacyTelemetryExporter
     exit 0
 }
 if (-not [string]::IsNullOrWhiteSpace($mode)) {
