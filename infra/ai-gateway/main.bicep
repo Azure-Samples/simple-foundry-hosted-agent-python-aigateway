@@ -92,19 +92,16 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableMoni
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalyticsWorkspace.id
-  }
-}
-
-resource telemetryExporter 'Microsoft.ApiManagement/service/workspaces/telemetryExporters@2025-09-01-preview' = if (enableMonitoring && deployApimGatewayViaBicep) {
-  parent: defaultWorkspace
-  name: telemetryExporterName
-  properties: {
-    kind: 'applicationInsights'
-    payloadCapture: false
-    applicationInsights: {
-      connectionString: appInsights!.properties.ConnectionString
-      resourceId: appInsights!.id
-    }
+    // Enables the Azure Monitor Workspace-based OTLP ingestion endpoints (metrics,
+    // logs, traces) that the AI Gateway OpenTelemetry exporter requires. The
+    // managed DCR/DCE and endpoints are generated asynchronously after this
+    // resource is created, so the telemetry exporter itself cannot be created
+    // in the same Bicep deployment; the postprovision hook configures it once
+    // the endpoints are available (see infra/scripts/configure-ai-gateway.sh).
+    // This property is valid at runtime but is not yet reflected in the
+    // Bicep/ARM type definitions for this API version, hence the suppression.
+    #disable-next-line BCP037
+    AzureMonitorWorkspaceIngestionMode: 'Enabled'
   }
 }
 
@@ -175,7 +172,7 @@ output appInsightsId string = enableMonitoring ? appInsights.id : ''
 output appInsightsName string = enableMonitoring ? appInsights.name : ''
 output logAnalyticsWorkspaceId string = enableMonitoring ? logAnalyticsWorkspace.id : ''
 output logAnalyticsWorkspaceName string = enableMonitoring ? logAnalyticsWorkspace.name : ''
-output telemetryExporterId string = enableMonitoring && deployApimGatewayViaBicep ? telemetryExporter.id : ''
+output telemetryExporterName string = telemetryExporterName
 output runtimeHostname string = deployApimGatewayViaBicep ? replace(aiGateway!.properties.gatewayUrl, 'https://', '') : ''
 output runtimeApiKeyId string = deployApimGatewayViaBicep ? runtimeApiKey.id : ''
 output gatewayPrincipalId string = deployApimGatewayViaBicep ? aiGateway!.identity.principalId : ''

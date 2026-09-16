@@ -309,6 +309,46 @@ Each model registration includes:
 The deployment name, not the backing catalog model name, is the OpenAI `model`
 value sent through AI Gateway.
 
+## AI Gateway monitoring
+
+AI Gateway monitoring uses the native OTLP/OpenTelemetry exporter contract, not
+the legacy `applicationInsights` exporter kind. The Bicep template creates the
+workspace-based Application Insights component with
+`AzureMonitorWorkspaceIngestionMode: Enabled`, which causes Azure Monitor to
+generate a managed Data Collection Rule (DCR), Data Collection Endpoint (DCE),
+and OTLP metrics/logs/traces ingestion endpoints for that component. Those
+endpoints are generated asynchronously after the component is created, so
+Bicep cannot create the exporter itself in the same deployment.
+
+Instead, the `postprovision` hook
+(`infra/scripts/configure-ai-gateway.sh` / `.ps1`):
+
+- Polls the Application Insights component until its OTLP metrics and logs
+  ingestion endpoints are populated (the traces endpoint may lag behind and is
+  not required; metrics and logs are sufficient for the portal dashboard
+  eligibility check).
+- Creates the `telemetryExporters` resource with `kind: OpenTelemetry`,
+  referencing the Application Insights resource ID, the metrics/logs/traces
+  OTLP endpoints, and managed-identity authentication with audience
+  `https://monitor.azure.com`.
+- Assigns the AI Gateway system-assigned identity the **Monitoring Metrics
+  Publisher** role (`3913510d-42f4-4e42-8a64-420c390055eb`) at the generated
+  DCR scope. This assignment is made with a direct `az role assignment
+  create` call from the hook rather than a nested Bicep role assignment: the
+  DCR is generated inside a system-managed resource group that carries a deny
+  assignment blocking role-assignment writes performed as part of a nested
+  ARM/Bicep deployment, while a direct role-assignment call from the
+  postprovision hook succeeds.
+
+The `--prepare-bicep` step (run from `preprovision`) also:
+
+- Registers the `Microsoft.Monitor` resource provider, which is required for
+  Application Insights to generate the managed DCR/DCE and OTLP endpoints.
+- Deletes any existing legacy `applicationInsights` exporter before Bicep
+  provisions again. The exporter `kind` is immutable once created, so
+  migrating an environment that still has the legacy exporter requires
+  deleting and recreating it; this cannot be done as an in-place update.
+
 ## Regions and model defaults
 
 The default split is:
