@@ -4,6 +4,8 @@ $PSNativeCommandUseErrorActionPreference = $true
 $aiGatewayApiVersion = "2025-09-01-preview"
 $legacyAiGatewayApiVersion = "2026-05-01"
 $foundryUserRoleId = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
+$modelRouteMaxAttempts = 60
+$modelRouteRetrySeconds = 5
 $defaultRepository = "microsoft/agent-framework"
 $githubMcpServer = "https://api.githubcopilot.com/mcp/"
 $githubMcpTools = "list_pull_requests,list_issues,actions_list"
@@ -103,7 +105,7 @@ function Test-GatewayModelRoute($GatewayUrl, $Model, $ApiKey) {
     } | ConvertTo-Json -Depth 5 -Compress
     $lastError = ""
 
-    for ($attempt = 1; $attempt -le 15; $attempt++) {
+    for ($attempt = 1; $attempt -le $modelRouteMaxAttempts; $attempt++) {
         try {
             Invoke-RestMethod `
                 -Method Post `
@@ -115,14 +117,14 @@ function Test-GatewayModelRoute($GatewayUrl, $Model, $ApiKey) {
             return
         } catch {
             $lastError = $_.Exception.Message
-            if ($attempt -lt 15) {
+            if ($attempt -lt $modelRouteMaxAttempts) {
                 Write-Host "Waiting for the AI Gateway model route, attempt=$attempt"
-                Start-Sleep -Seconds 4
+                Start-Sleep -Seconds $modelRouteRetrySeconds
             }
         }
     }
 
-    throw "AI Gateway model route failed. The route requires an explicit Api-Key header. Last error: $lastError"
+    throw "AI Gateway model route did not become ready after $modelRouteMaxAttempts attempts. Last error: $lastError"
 }
 
 function Prepare-BicepRbac {

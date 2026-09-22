@@ -39,6 +39,15 @@ if [[ "$actual_token_limit" != *"$expected_token_limit"* ]]; then
   exit 1
 fi
 
+expected_counter_key="'counterKey', createArray('identity')"
+
+if [[ "$actual_token_limit" != *"$expected_counter_key"* ]]; then
+  echo "Gateway token limit counterKey must use the current array contract." >&2
+  echo "Expected expression containing: $expected_counter_key" >&2
+  echo "Actual:   $actual_token_limit" >&2
+  exit 1
+fi
+
 az bicep build \
   --file "$repo_root/infra/main.bicep" \
   --outfile "$compiled_root_template" \

@@ -5,6 +5,8 @@ umask 077
 AI_GATEWAY_API_VERSION="2025-09-01-preview"
 LEGACY_AI_GATEWAY_API_VERSION="2026-05-01"
 FOUNDRY_USER_ROLE_ID="53ca6127-db72-4b80-b1b0-d745d6d5456d"
+MODEL_ROUTE_MAX_ATTEMPTS=60
+MODEL_ROUTE_RETRY_SECONDS=5
 DEFAULT_REPOSITORY="microsoft/agent-framework"
 GITHUB_MCP_SERVER="https://api.githubcopilot.com/mcp/"
 GITHUB_MCP_TOOLS="list_pull_requests,list_issues,actions_list"
@@ -88,7 +90,7 @@ verify_gateway_model_route() {
   request_body="$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "messages": [{"role": "user", "content": "Reply with exactly one word: ok"}], "max_completion_tokens": 128}))' "$model")"
   response_file="$(mktemp)"
 
-  for attempt in $(seq 1 15); do
+  for attempt in $(seq 1 "$MODEL_ROUTE_MAX_ATTEMPTS"); do
     status="$(curl -sS \
       -o "$response_file" \
       -w '%{http_code}' \
@@ -105,13 +107,13 @@ verify_gateway_model_route() {
         ;;
     esac
 
-    if [ "$attempt" -lt 15 ]; then
+    if [ "$attempt" -lt "$MODEL_ROUTE_MAX_ATTEMPTS" ]; then
       echo "Waiting for the AI Gateway model route, attempt=${attempt}, status=${status:-unavailable}"
-      sleep 4
+      sleep "$MODEL_ROUTE_RETRY_SECONDS"
     fi
   done
 
-  echo "AI Gateway model route failed with HTTP ${status:-unavailable}. The route requires an explicit Api-Key header." >&2
+  echo "AI Gateway model route did not become ready after ${MODEL_ROUTE_MAX_ATTEMPTS} attempts (HTTP ${status:-unavailable})." >&2
   if [ -s "$response_file" ]; then
     cat "$response_file" >&2
     echo >&2

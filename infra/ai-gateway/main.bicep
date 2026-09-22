@@ -149,7 +149,9 @@ resource foundryCatalogModels 'Microsoft.ApiManagement/service/workspaces/modelP
         type: 'tokenLimit'
         period: 'minute'
         count: model.?tokenLimit ?? 10000
-        counterKey: 'Identity'
+        counterKey: [
+          'identity'
+        ]
       }
     ]
   }

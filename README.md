@@ -78,6 +78,8 @@ azd ai agent invoke "Create a concise daily repo digest for microsoft/agent-fram
 
 If Azure leaves a failed AI Gateway after an activation or managed-identity conflict, rerun `azd up`. The preprovision hook deletes only the terminal-Failed `AIGateway` tagged for the current azd environment, purges its APIM soft-delete record, and waits for identity cleanup. `azd down` performs the same bounded purge and settle process in its postdown hook. If the bound expires, follow the exact retry guidance printed by the hook rather than relying on name availability alone.
 
+The postprovision hook can wait up to five minutes for a newly registered model route to become available after ARM provisioning succeeds.
+
 Run the scheduled digest immediately:
 
 ```bash
