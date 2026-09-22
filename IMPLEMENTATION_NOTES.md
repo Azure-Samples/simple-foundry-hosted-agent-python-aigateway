@@ -306,6 +306,10 @@ Each model registration includes:
 - `deployment.modelName` set to the Foundry deployment name from the final
   segment of the deployment resource ID
 
+Each registration also has a default-workspace alias that maps the OpenAI
+`model` value to the provider model resource. The runtime model route is not
+created when the provider model exists without this alias.
+
 The deployment name, not the backing catalog model name, is the OpenAI `model`
 value sent through AI Gateway.
 

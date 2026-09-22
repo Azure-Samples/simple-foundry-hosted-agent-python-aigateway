@@ -48,6 +48,27 @@ if [[ "$actual_token_limit" != *"$expected_counter_key"* ]]; then
   exit 1
 fi
 
+alias_properties="$(jq -r '
+  .resources[]
+  | select(.type == "Microsoft.ApiManagement/service/workspaces/aliases")
+  | .properties
+' "$compiled_template")"
+expected_alias_name="last(split(parameters('foundryModels')[copyIndex()].resourceId, '/'))"
+expected_backend_model="Microsoft.ApiManagement/service/workspaces/modelProviders/models"
+
+if [[ "$alias_properties" != *"$expected_alias_name"* ]]; then
+  echo "Gateway model alias must use the Foundry deployment name." >&2
+  echo "Expected expression containing: $expected_alias_name" >&2
+  echo "Actual: $alias_properties" >&2
+  exit 1
+fi
+
+if [[ "$alias_properties" != *"$expected_backend_model"* ]]; then
+  echo "Gateway model alias must target the registered provider model." >&2
+  echo "Actual: $alias_properties" >&2
+  exit 1
+fi
+
 az bicep build \
   --file "$repo_root/infra/main.bicep" \
   --outfile "$compiled_root_template" \

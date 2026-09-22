@@ -157,6 +157,20 @@ resource foundryCatalogModels 'Microsoft.ApiManagement/service/workspaces/modelP
   }
 }]
 
+resource foundryModelAliases 'Microsoft.ApiManagement/service/workspaces/aliases@2025-09-01-preview' = [for (model, i) in foundryModels: if (deployFoundryProvider && deployApimGatewayViaBicep) {
+  parent: defaultWorkspace
+  name: model.armName
+  properties: {
+    aliasName: last(split(model.resourceId, '/'))
+    description: model.?description ?? null
+    backendModels: [
+      {
+        resourceId: foundryCatalogModels[i].id
+      }
+    ]
+  }
+}]
+
 resource toolServers 'Microsoft.ApiManagement/service/workspaces/toolServers@2025-09-01-preview' = [for config in items(toolServerConfigs): if (deployApimGatewayViaBicep) {
   parent: defaultWorkspace
   name: config.key
