@@ -15,7 +15,7 @@ from repo_digest_agent import build_agent
 
 
 def main() -> None:
-    ResponsesHostServer(build_agent()).run()
+    ResponsesHostServer(agent=build_agent, history_source="agent_server").run()
 
 
 if __name__ == "__main__":
