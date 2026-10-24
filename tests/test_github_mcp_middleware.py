@@ -42,11 +42,16 @@ class CompactGitHubPayloadTests(unittest.TestCase):
                 },
             ),
             "github_actions_list": (
-                {"method": "get_workflow_run", "workflow_runs_filter": {"branch": "main"}},
+                {
+                    "method": "get_workflow_run",
+                    "workflow_runs_filter": {"branch": "main"},
+                    "per_page": 25,
+                    "perPage": 20,
+                },
                 {
                     "method": "list_workflow_runs",
                     "workflow_runs_filter": {"branch": "main", "status": "completed"},
-                    "per_page": 100,
+                    "perPage": 100,
                     "page": 1,
                 },
             ),

@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import httpx
 import mcp
-from agent_framework import Agent
+from agent_framework import Agent, FunctionInvocationContext
+from agent_framework._tools import _validate_arguments_against_schema
 from agent_framework.openai import OpenAIChatClient
 from agent_framework_foundry_hosting import FoundryToolbox, ResponsesHostServer
 from azure.ai.agentserver.responses import InMemoryResponseProvider
 from mcp import types
 from mcp.client.subscriptions import ListenNotSupportedError
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, Omit
 
+from github_mcp_middleware import compact_github_results
 import main
 import repo_digest_agent
 
@@ -39,6 +42,7 @@ class AgentConstructionTests(unittest.TestCase):
             self.assertIs(agent.client, client)
             self.assertEqual(agent.default_options["store"], False)
             self.assertEqual(agent.default_options["max_tokens"], 2_048)
+            self.assertIsInstance(agent.default_options["extra_headers"]["Authorization"], Omit)
             self.assertIn(toolbox, agent.mcp_tools)
         finally:
             asyncio.run(toolbox.close())
@@ -100,9 +104,49 @@ class FoundryToolboxConnectionTests(unittest.IsolatedAsyncioTestCase):
             await toolbox.close()
 
 
+class GitHubActionsSchemaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workflow_arguments_match_the_mcp_per_page_schema(self) -> None:
+        mcp_tool = types.Tool(
+            name="github_actions_list",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string"},
+                    "workflow_runs_filter": {"type": "object"},
+                    "perPage": {"type": "integer"},
+                    "page": {"type": "integer"},
+                },
+                "required": ["method"],
+                "additionalProperties": False,
+            },
+        )
+        context = FunctionInvocationContext(
+            function=SimpleNamespace(name="aigw-github___github_actions_list"),
+            arguments={
+                "method": "get_workflow_run",
+                "workflow_runs_filter": {"branch": "main"},
+                "per_page": 25,
+            },
+        )
+
+        async def validate_with_mcp_schema() -> None:
+            context.arguments = _validate_arguments_against_schema(
+                arguments=context.arguments,
+                schema=mcp_tool.input_schema,
+                tool_name=mcp_tool.name,
+            )
+            context.result = json.dumps({"workflow_runs": []})
+
+        await compact_github_results(context, validate_with_mcp_schema)
+
+        self.assertEqual(context.arguments["perPage"], 100)
+        self.assertNotIn("per_page", context.arguments)
+        self.assertEqual(context.arguments["method"], "list_workflow_runs")
+
+
 class ResponsesHostingTests(unittest.IsolatedAsyncioTestCase):
     async def test_stored_streaming_and_unstored_non_streaming_requests(self) -> None:
-        model_requests: list[dict[str, object]] = []
+        model_requests: list[tuple[dict[str, object], httpx.Headers]] = []
         message = {
             "id": "msg_1",
             "type": "message",
@@ -175,7 +219,7 @@ class ResponsesHostingTests(unittest.IsolatedAsyncioTestCase):
         stream_body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
 
         async def model_handler(request: httpx.Request) -> httpx.Response:
-            model_requests.append(json.loads(request.content))
+            model_requests.append((json.loads(request.content), request.headers))
             return httpx.Response(
                 200,
                 text=stream_body,
@@ -183,41 +227,56 @@ class ResponsesHostingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         model_http_client = httpx.AsyncClient(transport=httpx.MockTransport(model_handler))
-        openai_client = AsyncOpenAI(
-            api_key="test-key",
-            base_url="https://mock.invalid/v1/",
-            http_client=model_http_client,
-            max_retries=0,
-        )
-        chat_client = OpenAIChatClient(model="gpt-latest", async_client=openai_client)
         agent_factory_calls = 0
 
-        def build_mock_agent() -> Agent:
-            nonlocal agent_factory_calls
-            agent_factory_calls += 1
-            return Agent(
-                client=chat_client,
-                default_options={"store": False, "max_tokens": 2_048},
+        def create_test_chat_client(**kwargs: object) -> OpenAIChatClient:
+            openai_client = AsyncOpenAI(
+                api_key=kwargs["api_key"],
+                base_url=kwargs["base_url"],
+                default_headers=kwargs["default_headers"],
+                http_client=model_http_client,
+                max_retries=0,
+            )
+            return OpenAIChatClient(
+                model=kwargs["model"],
+                async_client=openai_client,
             )
 
-        server = ResponsesHostServer(
-            agent=build_mock_agent,
-            history_source="agent_server",
-            response_store=InMemoryResponseProvider(),
-        )
+        def build_test_agent() -> Agent:
+            nonlocal agent_factory_calls
+            agent_factory_calls += 1
+            return repo_digest_agent.build_agent()
+
         try:
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=server),
-                base_url="http://test",
-            ) as app:
-                stored = await app.post(
-                    "/responses",
-                    json={"input": "Say hello.", "store": True, "stream": True},
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "AZURE_AI_GATEWAY_ENDPOINT": "https://mock.invalid/",
+                        "AZURE_AI_GATEWAY_API_KEY": "test-gateway-key",
+                        "AZURE_AI_GATEWAY_MODEL": "gpt-latest",
+                    },
+                ),
+                patch.object(repo_digest_agent, "OpenAIChatClient", side_effect=create_test_chat_client),
+                patch.object(repo_digest_agent, "_github_toolbox", return_value=None),
+            ):
+                server = ResponsesHostServer(
+                    agent=build_test_agent,
+                    history_source="agent_server",
+                    response_store=InMemoryResponseProvider(),
                 )
-                unstored = await app.post(
-                    "/responses",
-                    json={"input": "Say hello.", "store": False, "stream": False},
-                )
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=server),
+                    base_url="http://test",
+                ) as app:
+                    stored = await app.post(
+                        "/responses",
+                        json={"input": "Say hello.", "store": True, "stream": True},
+                    )
+                    unstored = await app.post(
+                        "/responses",
+                        json={"input": "Say hello.", "store": False, "stream": False},
+                    )
 
             self.assertEqual(stored.status_code, 200, stored.text)
             self.assertIn("event: response.completed", stored.text)
@@ -227,8 +286,11 @@ class ResponsesHostingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output_text, "Hello")
             self.assertEqual(agent_factory_calls, 2)
             self.assertEqual(len(model_requests), 2)
-            self.assertTrue(all(request["store"] is False for request in model_requests))
-            self.assertTrue(all(request["model"] == "gpt-latest" for request in model_requests))
+            for payload, headers in model_requests:
+                self.assertIs(payload["store"], False)
+                self.assertEqual(payload["model"], "gpt-latest")
+                self.assertEqual(headers.get("api-key"), "test-gateway-key")
+                self.assertIsNone(headers.get("authorization"))
         finally:
             await model_http_client.aclose()
 

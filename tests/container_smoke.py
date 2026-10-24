@@ -145,6 +145,22 @@ class _MockHandler(BaseHTTPRequestHandler):
         self.requests.append((self.path, payload))
 
         if self.path == GATEWAY_PATH:
+            api_key = self.headers.get("Api-Key")
+            authorization = self.headers.get("Authorization")
+            if not api_key or authorization:
+                self._send_json(
+                    400,
+                    {
+                        "error": {
+                            "message": (
+                                "Specify either an API key or an Authorization header, not both."
+                                if api_key and authorization
+                                else "An Api-Key header is required."
+                            )
+                        }
+                    },
+                )
+                return
             if payload.get("model") != "gpt-latest" or payload.get("store") is not False:
                 self._send_json(400, {"error": {"message": "Unexpected model request options."}})
                 return
