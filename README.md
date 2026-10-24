@@ -69,6 +69,23 @@ Or use the console:
 uv run chat.py
 ```
 
+Run the zero-auth container smoke test after building the image:
+
+```bash
+docker build -t daily-repo-digest .
+python tests/container_smoke.py --image daily-repo-digest
+```
+
+With an existing Azure login and selected azd environment, verify the deployed
+agent without redeploying, or optionally deploy first:
+
+```bash
+bash tests/test-azd-smoke.sh
+bash tests/test-azd-smoke.sh --deploy
+# Or provision and deploy first:
+bash tests/test-azd-smoke.sh --up
+```
+
 ## Deploy
 
 ```bash
