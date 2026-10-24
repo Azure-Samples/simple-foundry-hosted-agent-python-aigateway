@@ -30,7 +30,7 @@ param location string
   'swedencentral'
   'eastus2'
 ])
-@description('Azure region for the release-gated Microsoft.ApiManagement/service AIGateway resource.')
+@description('Azure region for the Microsoft.ApiManagement/aigateways resource.')
 param aiGatewayLocation string = 'eastus2'
 
 @description('Optional Azure AD user or service principal object ID for development access.')
@@ -108,6 +108,15 @@ param miniModelCapacity int = 200
 @description('ARM-safe deployment and Gateway catalog name for the full model.')
 param modelDeploymentName string = 'gpt-latest'
 
+@description('Client-facing alias name for the primary model, with mini-model failover.')
+param modelAliasName string = 'gpt-latest'
+
+@description('Optional primary alias routes. Use unique modelArmName values, priority 0-100, and weight 1-100; same-priority weights split traffic.')
+param modelAliasBackends array = []
+
+@description('Client-facing alias name for the mini model.')
+param miniModelAliasName string = 'gpt-mini-latest'
+
 @description('Backing Foundry model name for the full deployment. Use gpt-5.5 only when gpt-5.6-sol is unavailable.')
 param modelName string = 'gpt-5.6-sol'
 
@@ -130,6 +139,18 @@ var effectiveAppInsightsName = !empty(appInsightsName) ? appInsightsName : take(
 var effectiveLogAnalyticsWorkspaceName = !empty(logAnalyticsWorkspaceName) ? logAnalyticsWorkspaceName : take('${effectiveAiGatewayName}-logs', 63)
 var effectiveAgentAppInsightsName = !empty(agentAppInsightsName) ? agentAppInsightsName : take('${effectiveAiServicesName}-appinsights', 64)
 var effectiveAgentLogAnalyticsWorkspaceName = !empty(agentLogAnalyticsWorkspaceName) ? agentLogAnalyticsWorkspaceName : take('${effectiveAiServicesName}-logs', 63)
+var effectiveModelAliasBackends = empty(modelAliasBackends) ? [
+  {
+    modelArmName: modelDeploymentName
+    priority: 0
+    weight: 100
+  }
+  {
+    modelArmName: miniModelDeploymentName
+    priority: 1
+    weight: 100
+  }
+] : modelAliasBackends
 var gatewayModelDeployments = [
   {
     deploymentName: miniModelDeploymentName
@@ -225,13 +246,32 @@ module aiGateway './ai-gateway/main.bicep' = {
       resourceId: foundryModels.outputs.modelDeploymentIds[i]
       modelName: deployment.modelName
       modelVersion: deployment.modelVersion
-      tokenLimit: deployment.capacity * 1000
       apiFormat: 'OpenAIChatCompletions'
       supportedEndpoints: [
         '/openai/v1/chat/completions'
         '/openai/v1/responses'
       ]
     }]
+    modelAliasesConfig: [
+      {
+        armName: 'primary-router'
+        aliasName: modelAliasName
+        description: 'Primary model with automatic failover to the mini deployment.'
+        backendModels: effectiveModelAliasBackends
+      }
+      {
+        armName: 'mini-router'
+        aliasName: miniModelAliasName
+        description: 'Direct alias for the mini deployment.'
+        backendModels: [
+          {
+            modelArmName: miniModelDeploymentName
+            priority: 0
+            weight: 100
+          }
+        ]
+      }
+    ]
   }
 }
 
@@ -264,6 +304,8 @@ output ENABLE_AI_GATEWAY bool = true
 output AI_GATEWAY_NAME string = effectiveAiGatewayName
 output AI_GATEWAY_LOCATION string = aiGatewayLocation
 output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.apimGatewayId
+output AI_GATEWAY_MODEL_ALIAS_IDS array = aiGateway.outputs.modelAliasIds
+output AI_GATEWAY_DEFAULT_MODEL_ALIAS_NAME string = aiGateway.outputs.defaultModelAliasName
 output AI_GATEWAY_CONNECTOR_NAMESPACE_RESOURCE_ID string = aiGateway.outputs.connectorNamespaceId
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = aiGateway.outputs.foundryUserRoleAssignmentName
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
@@ -271,8 +313,8 @@ output APPLICATION_INSIGHTS_NAME string = aiGateway.outputs.appInsightsName
 output LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
 output LOG_ANALYTICS_WORKSPACE_NAME string = aiGateway.outputs.logAnalyticsWorkspaceName
 output AZURE_AI_GATEWAY_ENDPOINT string = 'https://${aiGateway.outputs.runtimeHostname}/'
-output AZURE_AI_GATEWAY_MODEL string = modelDeploymentName
-output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelDeploymentName
+output AZURE_AI_GATEWAY_MODEL string = modelAliasName
+output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelAliasName
 output AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT string = modelDeploymentName
 output AI_GATEWAY_INTERNAL_MODEL_NAME string = modelName
 output AI_GATEWAY_INTERNAL_MODEL_VERSION string = modelVersion

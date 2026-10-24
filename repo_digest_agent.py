@@ -6,6 +6,7 @@ from agent_framework import Agent
 from agent_framework.openai import OpenAIChatClient
 from agent_framework_foundry_hosting import FoundryToolbox
 from azure.identity import DefaultAzureCredential
+from openai import Omit
 
 from github_mcp_middleware import compact_github_results
 
@@ -34,7 +35,7 @@ You create concise daily GitHub repository digests from live repository data.
   string or a page number. This uses the core GitHub API, not the Search API.
 - For workflows, call aigw-github___github_actions_list with method
   "list_workflow_runs" and
-  workflow_runs_filter status "completed", per_page 100, and page 1. Do not use
+  workflow_runs_filter status "completed", perPage 100, and page 1. Do not use
   "failure" as a status. Tool middleware keeps only failed runs from the last
   24 hours and removes fields the digest does not use.
 - Focus on what changed, what needs attention, and useful next actions.
@@ -86,6 +87,10 @@ def build_agent() -> Agent:
         description="Creates daily GitHub repository digests through AI Gateway.",
         instructions=INSTRUCTIONS,
         tools=_github_toolbox(),
-        default_options={"store": False, "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS},
+        default_options={
+            "store": False,
+            "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+            "extra_headers": {"Authorization": Omit()},
+        },
         middleware=[compact_github_results],
     )

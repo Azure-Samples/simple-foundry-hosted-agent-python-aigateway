@@ -86,10 +86,11 @@ def _normalize_github_arguments(
         workflow_filter = arguments.get("workflow_runs_filter")
         normalized_filter = dict(workflow_filter) if isinstance(workflow_filter, Mapping) else {}
         normalized_filter["status"] = "completed"
+        arguments.pop("per_page", None)
         arguments.update(
             method="list_workflow_runs",
             workflow_runs_filter=normalized_filter,
-            per_page=100,
+            perPage=100,
             page=1,
         )
 

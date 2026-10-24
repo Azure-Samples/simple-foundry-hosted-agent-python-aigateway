@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
 $aiGatewayApiVersion = "2025-09-01-preview"
-$legacyAiGatewayApiVersion = "2026-05-01"
+$legacyAiGatewayApiVersion = "2025-09-01-preview"
 $foundryUserRoleId = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
 $defaultRepository = "microsoft/agent-framework"
 $githubMcpServer = "https://api.githubcopilot.com/mcp/"
@@ -135,13 +135,13 @@ function Prepare-BicepRbac {
         return
     }
 
-    $gatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$gatewayName"
-    $legacyGatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/aigateways/$gatewayName"
+    $gatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/aigateways/$gatewayName"
+    $legacyGatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$gatewayName"
     $gatewayUri = "https://management.azure.com${gatewayResourceId}?api-version=$aiGatewayApiVersion"
     if (-not (Test-AzRestResource $gatewayUri)) {
         $legacyGatewayUri = "https://management.azure.com${legacyGatewayResourceId}?api-version=$legacyAiGatewayApiVersion"
         if (Test-AzRestResource $legacyGatewayUri) {
-            throw "The environment uses the retired Microsoft.ApiManagement/aigateways resource. Use a fresh azd environment; Bicep will not create a canonical service alongside it."
+            throw "The environment uses the retired Microsoft.ApiManagement/service AI Gateway resource. Use a fresh azd environment; Bicep will not create a canonical gateway alongside it."
         }
         return
     }
@@ -218,8 +218,8 @@ $gatewayMiniModel = Require-Value "AZURE_AI_GATEWAY_MINI_MODEL" (First-Value @($
 $githubRepository = First-Value @($env:GITHUB_REPOSITORY, (Get-AzdValue "GITHUB_REPOSITORY"), $defaultRepository)
 $projectEndpoint = Require-Value "FOUNDRY_PROJECT_ENDPOINT" (First-Value @($env:FOUNDRY_PROJECT_ENDPOINT, (Get-AzdValue "FOUNDRY_PROJECT_ENDPOINT")))
 
-$gatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$gatewayName"
-$legacyGatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/aigateways/$gatewayName"
+$gatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/aigateways/$gatewayName"
+$legacyGatewayResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$gatewayName"
 $workspaceName = First-Value @($env:AI_GATEWAY_WORKSPACE_NAME, "default")
 $workspaceResourceId = "$gatewayResourceId/workspaces/$workspaceName"
 $gatewayUri = "https://management.azure.com${gatewayResourceId}?api-version=$aiGatewayApiVersion"
@@ -227,9 +227,9 @@ $gatewayUri = "https://management.azure.com${gatewayResourceId}?api-version=$aiG
 if (-not (Test-AzRestResource $gatewayUri)) {
     $legacyGatewayUri = "https://management.azure.com${legacyGatewayResourceId}?api-version=$legacyAiGatewayApiVersion"
     if (Test-AzRestResource $legacyGatewayUri) {
-        throw "The environment uses the retired Microsoft.ApiManagement/aigateways resource. Use a fresh azd environment; this hook will not access hidden projected APIM resources."
+        throw "The environment uses the retired Microsoft.ApiManagement/service AI Gateway resource. Use a fresh azd environment; this hook will not access hidden projected APIM resources."
     }
-    throw "Bicep did not create the expected Microsoft.ApiManagement/service AI Gateway: $gatewayName"
+    throw "Bicep did not create the expected Microsoft.ApiManagement/aigateways resource: $gatewayName"
 }
 
 $gatewayState = [string](az rest --method get --uri $gatewayUri --query properties.provisioningState -o tsv)
@@ -242,7 +242,14 @@ if (@("SystemAssigned", "SystemAssigned, UserAssigned") -notcontains $identityTy
     throw "Bicep did not enable the required AI Gateway system-assigned identity."
 }
 
-$gatewayUrl = Require-Value "AZURE_AI_GATEWAY_ENDPOINT" ([string](az rest --method get --uri $gatewayUri --query properties.gatewayUrl -o tsv))
+$gatewayHost = Require-Value "AZURE_AI_GATEWAY_ENDPOINT" ([string](az rest --method get --uri $gatewayUri --query "properties.frontend.defaultHostname || properties.gatewayUrl" -o tsv))
+if ($gatewayHost.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
+    $gatewayUrl = $gatewayHost
+} elseif ($gatewayHost.StartsWith("http://", [StringComparison]::OrdinalIgnoreCase)) {
+    $gatewayUrl = "https://" + $gatewayHost.Substring(7)
+} else {
+    $gatewayUrl = "https://$gatewayHost"
+}
 if (-not $gatewayUrl.EndsWith("/", [StringComparison]::Ordinal)) {
     $gatewayUrl += "/"
 }

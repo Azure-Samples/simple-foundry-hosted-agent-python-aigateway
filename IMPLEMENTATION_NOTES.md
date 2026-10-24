@@ -263,31 +263,33 @@ The root deployment creates three resource groups:
 - `foundryagents` for the Foundry project, agent hosting, storage, Container
   Registry, and hosted-agent monitoring.
 - `foundrymodels` for the separate Foundry model account and deployments.
-- `gateway` for AI Gateway, Connector Namespace, Gateway monitoring, model
-  provider, and model registrations.
+- `gateway` for the standalone AI Gateway, Connector Namespace, Gateway
+  monitoring, model provider, model registrations, and model aliases.
 
 The only cross-group runtime authorization is the AI Gateway system identity's
 Foundry User role assignment on the model account. The public Azure
 role-definition ID used by the template is
 `53ca6127-db72-4b80-b1b0-d745d6d5456d`.
 
-The AI Gateway module uses these preview contracts:
+The AI Gateway module uses the live `2025-09-01-preview` contracts:
 
-- `Microsoft.ApiManagement/service@2025-09-01-preview`
-- SKU `AIGateway` with capacity `1`
-- `Microsoft.ApiManagement/service/workspaces/modelProviders@2025-09-01-preview`
-- `Microsoft.ApiManagement/service/workspaces/modelProviders/models@2025-09-01-preview`
-- `Microsoft.ApiManagement/service/workspaces/toolServers@2025-09-01-preview`
-- `Microsoft.ApiManagement/service/apiKeys@2025-09-01-preview`
+- `Microsoft.ApiManagement/aigateways` with SKU `Consumption`
+- `Microsoft.ApiManagement/aigateways/workspaces`
+- `Microsoft.ApiManagement/aigateways/workspaces/modelProviders`
+- `Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models`
+- `Microsoft.ApiManagement/aigateways/workspaces/aliases`
+- `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
+- `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
+- `Microsoft.ApiManagement/aigateways/apiKeys`
 - `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
 The Connector Namespace uses the same name, resource group, and location as
-the APIM AI Gateway service. It is a separate resource from the GitHub MCP
+the AI Gateway. It is a separate resource from the GitHub MCP
 ToolServer and supports connector-backed scenarios.
 
-The default workspace is implicit for control-plane child resources. The
-postprovision hook waits for the workspace child collection before configuring
-the GitHub ToolServer.
+The predefined `workspaces/default` resource is the parent of every
+workspace-scoped child. The postprovision hook waits for the workspace child
+collection before configuring the GitHub ToolServer.
 
 The Foundry model provider uses:
 
@@ -302,12 +304,17 @@ Each model registration includes:
 - `apiFormat: OpenAIChatCompletions`
 - `/openai/v1/chat/completions`
 - `/openai/v1/responses`
-- A token-limit policy derived from deployment capacity
+- The live `displayName` wire property
 - `deployment.modelName` set to the Foundry deployment name from the final
   segment of the deployment resource ID
 
-The deployment name, not the backing catalog model name, is the OpenAI `model`
-value sent through AI Gateway.
+Model creation omits inline policies for compatibility with the live RP. The
+alias `gpt-latest` routes to the full deployment at priority 0 and fails over to
+the mini deployment at priority 1. Both backends explicitly set a weight of 100;
+aliases can instead place multiple backends at the same priority with relative
+weights for traffic splitting. The separate `gpt-mini-latest` alias addresses
+the mini deployment directly. Each alias backend points to the gateway child
+model resource ID, while the client sends the alias name as the OpenAI `model`.
 
 ## Regions and model defaults
 
@@ -336,7 +343,7 @@ The AI Gateway preview region allowlist is:
 
 The model defaults are:
 
-| Purpose | Gateway deployment | Backing model | Version | Capacity |
+| Purpose | Foundry deployment / Gateway alias | Backing model | Version | Capacity |
 | --- | --- | --- | --- | --- |
 | Full | `gpt-latest` | `gpt-5.6-sol` | `2026-07-09` | 20 |
 | Mini | `gpt-mini-latest` | `gpt-5.4-mini` | `2026-03-17` | 200 |
@@ -344,11 +351,10 @@ The model defaults are:
 If `gpt-5.6-sol` is unavailable, set `modelName=gpt-5.5` and
 `modelVersion=2026-04-24`.
 
-Global Standard capacity maps to the Gateway token limit at 1,000 tokens per
-minute per capacity unit. Capacity 20 therefore registers 20,000 tokens per
-minute for the full deployment. Mini capacity 200 accommodates requests from
-the GitHub Copilot app, also called ghapp, when built-in tool definitions make
-the prompt substantially larger.
+Global Standard deployment capacity is provisioned on the Foundry model
+account. Mini capacity 200 accommodates requests from the GitHub Copilot app,
+also called ghapp, when built-in tool definitions make the prompt substantially
+larger.
 
 The agent caps each response at 2,048 output tokens. Azure quota evaluation
 uses an estimate based on the prompt and requested maximum output, so this cap
@@ -371,17 +377,17 @@ Foundry fallback.
 
 ## AI Gateway deletion lifecycle
 
-APIM deletion can include a live service phase, a soft-deleted service phase,
-and an identity cleanup interval. Name availability alone does not prove that
-identity cleanup has completed.
+AI Gateway deletion has a live resource phase and an identity cleanup interval.
+The standalone `aigateways` resource does not use the APIM `service` deleted
+services endpoint. Name availability alone does not prove that identity cleanup
+has completed.
 
 `azure.yaml` invokes the lifecycle scripts in two paths:
 
 - Preprovision preserves a succeeded Gateway and removes only a terminal
   failed Gateway that matches the current azd environment ownership markers.
 - Postdown completes the explicit teardown, waits for the live resource to
-  disappear, purges the soft-deleted APIM service, and waits for identity
-  cleanup.
+  disappear, and waits for identity cleanup.
 
 The scripts use bounded exponential polling. Defaults are:
 
@@ -400,12 +406,6 @@ Tests can override these values with:
 The nonsecret `.azure/<environment>/apim-lifecycle.state` marker contains only
 environment and resource identity, location, lifecycle state, time, and a
 deployment or resource failure identifier.
-
-Relevant public documentation:
-
-- [Azure API Management soft-delete](https://learn.microsoft.com/azure/api-management/soft-delete)
-- [Deleted Services - Get By Name](https://learn.microsoft.com/rest/api/apimanagement/deleted-services/get-by-name?view=rest-apimanagement-2024-05-01)
-- [Deleted Services - Purge](https://learn.microsoft.com/rest/api/apimanagement/deleted-services/purge?view=rest-apimanagement-2024-05-01)
 
 ## Hosted-agent image and monitoring
 

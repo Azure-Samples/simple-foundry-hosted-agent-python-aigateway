@@ -13,7 +13,7 @@ az bicep build \
 
 actual="$(jq -r '
   .resources[]
-  | select(.type == "Microsoft.ApiManagement/service/workspaces/modelProviders/models")
+  | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models")
   | .properties.deployment.modelName
 ' "$compiled_template")"
 expected="[last(split(parameters('foundryModels')[copyIndex()].resourceId, '/'))]"
@@ -25,17 +25,55 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-actual_token_limit="$(jq -r '
+actual_model_policies="$(jq -r '
   .resources[]
-  | select(.type == "Microsoft.ApiManagement/service/workspaces/modelProviders/models")
+  | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models")
   | .properties.policies
 ' "$compiled_template")"
-expected_token_limit="coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'tokenLimit'), 10000)"
+if [ "$actual_model_policies" != "null" ]; then
+  echo "Gateway model PUTs must omit inline policies for the live RP contract." >&2
+  echo "Actual: $actual_model_policies" >&2
+  exit 1
+fi
 
-if [[ "$actual_token_limit" != *"$expected_token_limit"* ]]; then
-  echo "Gateway token limit must use the quota supplied for the Foundry deployment." >&2
-  echo "Expected expression containing: $expected_token_limit" >&2
-  echo "Actual:   $actual_token_limit" >&2
+gateway_sku="$(jq -r '
+  .resources[]
+  | select(.type == "Microsoft.ApiManagement/aigateways")
+  | .sku.name
+' "$compiled_template")"
+if [ "$gateway_sku" != "Consumption" ]; then
+  echo "AI Gateway must use the live RP Consumption SKU." >&2
+  echo "Actual: $gateway_sku" >&2
+  exit 1
+fi
+
+actual_aliases="$(jq -r '
+  .resources[]
+  | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/aliases")
+  | .properties.copy[]
+  | select(.name == "backendModels")
+  | .input
+' "$compiled_template")"
+for token in \
+  "parameters('modelAliasesConfig')" \
+  "Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models" \
+  "priority" \
+  "weight"; do
+  if ! grep -Fq "$token" <<< "$actual_aliases"; then
+    echo "Gateway aliases must reference gateway child models and preserve explicit priority and weight routing." >&2
+    echo "Missing: $token" >&2
+    echo "Actual: $actual_aliases" >&2
+    exit 1
+  fi
+done
+
+alias_has_selection_order="$(jq -r '
+  .resources[]
+  | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/aliases")
+  | .properties | has("selectionOrder")
+' "$compiled_template")"
+if [ "$alias_has_selection_order" != "false" ]; then
+  echo "Live alias PUTs must omit selectionOrder." >&2
   exit 1
 fi
 
@@ -44,18 +82,54 @@ az bicep build \
   --outfile "$compiled_root_template" \
   >/dev/null
 
+root_alias_input="$(jq -r '
+  .. | objects
+  | select(has("modelAliasesConfig"))
+  | .modelAliasesConfig.value
+  | select(. != null)
+' "$compiled_root_template")"
+
+if [[ "$root_alias_input" != *"modelArmName"* ||
+  "$root_alias_input" != *"priority"* ||
+  "$root_alias_input" != *"weight"* ||
+  "$root_alias_input" != *"primary-router"* ]]; then
+  echo "Root deployment must create a multi-model alias with explicit priority and weight routes." >&2
+  echo "Actual: $root_alias_input" >&2
+  exit 1
+fi
+
+default_alias_routes="$(jq -r '.variables.effectiveModelAliasBackends' "$compiled_root_template")"
+for token in \
+  "parameters('modelDeploymentName')" \
+  "parameters('miniModelDeploymentName')" \
+  "'priority', 0" \
+  "'priority', 1" \
+  "'weight', 100"; do
+  if ! grep -Fq "$token" <<< "$default_alias_routes"; then
+    echo "Default alias routes must configure primary/failover priority and explicit weight." >&2
+    echo "Missing: $token" >&2
+    echo "Actual: $default_alias_routes" >&2
+    exit 1
+  fi
+done
+
 root_model_input="$(jq -r '
   .. | objects
   | select(has("foundryModels"))
   | .foundryModels.copy[0].input
   | select(. != null)
 ' "$compiled_root_template")"
-
-if [[ "$root_model_input" != *"'tokenLimit', mul("*".capacity, 1000)"* ]]; then
-  echo "Root deployment must derive each Gateway token limit from model capacity." >&2
-  echo "Actual: $root_model_input" >&2
-  exit 1
-fi
+for token in \
+  "OpenAIChatCompletions" \
+  "/openai/v1/chat/completions" \
+  "/openai/v1/responses"; do
+  if ! grep -Fq "$token" <<< "$root_model_input"; then
+    echo "Root model registrations must use the live RP API format and endpoint paths." >&2
+    echo "Missing: $token" >&2
+    echo "Actual: $root_model_input" >&2
+    exit 1
+  fi
+done
 
 mini_capacity="$(jq -r '.parameters.miniModelCapacity.defaultValue' "$compiled_root_template")"
 if [ "$mini_capacity" != "200" ]; then

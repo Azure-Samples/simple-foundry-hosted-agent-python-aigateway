@@ -9,7 +9,6 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
 $aiGatewayApiVersion = "2025-09-01-preview"
-$deletedServiceApiVersion = "2024-05-01"
 $defaultAiGatewayLocation = "eastus2"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 
@@ -145,8 +144,8 @@ function Test-DeterministicShape($CandidateName, $CandidateGroup) {
 function Find-LiveGateway {
     $candidateLines = & az resource list `
         --subscription $subscriptionId `
-        --resource-type Microsoft.ApiManagement/service `
-        --query "[?tags.`"azd-env-name`"=='$environmentName' && sku.name=='AIGateway'].[name,resourceGroup,location]" `
+        --resource-type Microsoft.ApiManagement/aigateways `
+        --query "[?tags.`"azd-env-name`"=='$environmentName' && sku.name=='Consumption'].[name,resourceGroup,location]" `
         -o tsv
     if ($LASTEXITCODE -ne 0) {
         throw "AI Gateway lifecycle error: could not discover AI Gateway resources for azd environment $environmentName."
@@ -162,7 +161,7 @@ function Find-LiveGateway {
         $candidates += ,$parts
     }
     if ($candidates.Count -gt 1) {
-        throw "AI Gateway lifecycle error: found multiple AIGateway services tagged azd-env-name=$environmentName; set AI_GATEWAY_NAME and AI_GATEWAY_RESOURCE_GROUP explicitly."
+        throw "AI Gateway lifecycle error: found multiple AI Gateways tagged azd-env-name=$environmentName; set AI_GATEWAY_NAME and AI_GATEWAY_RESOURCE_GROUP explicitly."
     }
     if ($candidates.Count -eq 0) { return $false }
     $script:gatewayName = $candidates[0][0]
@@ -224,7 +223,7 @@ function Use-FailureTarget($TargetId, $DeploymentId) {
     $targetName = $segments[7]
     if ($targetSubscription -ne $subscriptionId -or
         $targetProvider -ne "Microsoft.ApiManagement" -or
-        $targetType -ne "service" -or
+        $targetType -ne "aigateways" -or
         -not (Test-DeterministicShape $targetName $targetGroup)) {
         return $false
     }
@@ -250,9 +249,8 @@ function Use-FailureTarget($TargetId, $DeploymentId) {
 }
 
 function Update-ResourceUris {
-    $script:serviceResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$gatewayName"
+    $script:serviceResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/aigateways/$gatewayName"
     $script:serviceUri = "https://management.azure.com${serviceResourceId}?api-version=$aiGatewayApiVersion"
-    $script:deletedServiceUri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.ApiManagement/locations/$gatewayLocation/deletedservices/${gatewayName}?api-version=$deletedServiceApiVersion"
 }
 
 function Get-LiveRecord {
@@ -276,8 +274,8 @@ function Test-LiveDeleting($Record) {
 }
 
 function Assert-LiveOwnership($Record) {
-    if ($Record.Sku -ne "AIGateway") {
-        throw "AI Gateway lifecycle error: refusing $resourceGroup/$gatewayName; expected SKU AIGateway but found $($Record.Sku)."
+    if ($Record.Sku -ne "Consumption") {
+        throw "AI Gateway lifecycle error: refusing $resourceGroup/$gatewayName; expected SKU Consumption but found $($Record.Sku)."
     }
     if ($Record.Owner -ne $environmentName) {
         throw "AI Gateway lifecycle error: refusing $resourceGroup/$gatewayName; expected azd-env-name=$environmentName but found $($Record.Owner)."
@@ -293,15 +291,13 @@ function Remove-LiveGateway($Action) {
     Invoke-AzRestDelete $serviceUri -RequireMatch
 }
 
-function Wait-DeletedGatewaySettle($QuietStart, $FailureId) {
+function Wait-GatewaySettle($QuietStart, $FailureId) {
     $startedAt = Get-NowEpoch
     $delay = $pollInitialSeconds
     while ($true) {
         $surfacesClear = $true
-        $livePresent = $false
         $record = Get-LiveRecord
         if ($null -ne $record) {
-            $livePresent = $true
             Assert-LiveOwnership $record
             $surfacesClear = $false
             $QuietStart = Get-NowEpoch
@@ -314,31 +310,18 @@ function Wait-DeletedGatewaySettle($QuietStart, $FailureId) {
             }
         }
 
-        if (-not $livePresent) {
-            $deletedService = Invoke-AzRestGet $deletedServiceUri "properties.serviceId"
-            if ($deletedService.Exists) {
-                $surfacesClear = $false
-                if ($deletedService.Output -ine $serviceResourceId) {
-                    throw "AI Gateway lifecycle error: refusing to purge soft-deleted AI Gateway $gatewayName; its original serviceId is $($deletedService.Output), expected $serviceResourceId."
-                }
-                Write-Host "Purging soft-deleted AI Gateway $gatewayName in $gatewayLocation."
-                Invoke-AzRestDelete $deletedServiceUri
-                $QuietStart = Get-NowEpoch
-            }
-        }
-
         $current = Get-NowEpoch
         $elapsed = $current - $QuietStart
         if ($surfacesClear -and $elapsed -ge $identitySettleSeconds) {
             Write-Marker "settled" $current $FailureId
-            Write-Host "AI Gateway deletion, soft-delete purge, and ${identitySettleSeconds}s identity settle window completed."
+            Write-Host "AI Gateway deletion and ${identitySettleSeconds}s identity settle window completed."
             return
         }
         if (($current - $startedAt) -ge $operationTimeoutSeconds) {
             Write-Marker "pending" $QuietStart $FailureId
-            throw "AI Gateway lifecycle error: Azure exposes no authoritative managed-identity tombstone endpoint, and cleanup did not remain quiet for ${identitySettleSeconds}s within the ${operationTimeoutSeconds}s bound. Wait, then rerun 'azd provision'. If FailedIdentityOperation persists, run 'azd down' and retry 'azd up'; the postdown hook will retry the APIM purge."
+            throw "AI Gateway lifecycle error: cleanup did not remain quiet for ${identitySettleSeconds}s within the ${operationTimeoutSeconds}s bound. Wait, then rerun 'azd provision'. If FailedIdentityOperation persists, run 'azd down' and retry 'azd up'."
         }
-        Write-Host "Waiting for APIM deletion and managed-identity cleanup ($elapsed/${identitySettleSeconds}s quiet)."
+        Write-Host "Waiting for AI Gateway deletion and managed-identity cleanup ($elapsed/${identitySettleSeconds}s quiet)."
         if ($delay -gt 0) { Start-Sleep -Seconds $delay }
         $delay = Get-NextDelay $delay
     }
@@ -467,4 +450,4 @@ if ($null -ne $record) {
     Write-Marker "pending" $quietStart (First-Value @($recentFailureId, $markerFailureId))
 }
 
-Wait-DeletedGatewaySettle $quietStart (First-Value @($recentFailureId, $markerFailureId))
+Wait-GatewaySettle $quietStart (First-Value @($recentFailureId, $markerFailureId))

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Bicep
+        run: az bicep install
+
+      - name: Build Bicep templates
+        run: |
+          az bicep build --file infra/main.bicep
+          az bicep build --file infra/ai-gateway/main.bicep
+
+      - name: Run infrastructure tests
+        run: |
+          bash tests/test-apim-lifecycle.sh
+          bash tests/test-ai-gateway-model-registration.sh
+
+      - name: Run Python unit tests
+        run: uv run --frozen python -m unittest discover -s tests -v
+
+      - name: Build container image
+        run: docker build --tag simple-foundry-hosted-agent-python-aigateway:ci .
+
+      - name: Run container smoke test
+        run: python tests/container_smoke.py --image simple-foundry-hosted-agent-python-aigateway:ci
