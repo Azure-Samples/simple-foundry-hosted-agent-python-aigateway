@@ -3,7 +3,6 @@ set -euo pipefail
 umask 077
 
 AI_GATEWAY_API_VERSION="2025-09-01-preview"
-DELETED_SERVICE_API_VERSION="2024-05-01"
 DEFAULT_AI_GATEWAY_LOCATION="eastus2"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -17,10 +16,10 @@ usage() {
   cat >&2 <<EOF
 Usage: $0 prepare|cleanup
 
-prepare  Safely recovers only an environment-owned terminal-Failed AI Gateway,
-         purges any soft-deleted service, and waits for managed-identity cleanup.
-cleanup  Completes an explicit azd down/recovery action, including APIM purge and
-         the same bounded managed-identity settle window.
+prepare  Safely recovers only an environment-owned terminal-Failed AI Gateway
+         and waits for managed-identity cleanup.
+cleanup  Completes an explicit azd down/recovery action and waits for the same
+         bounded managed-identity settle window.
 
 Timing overrides:
   APIM_LIFECYCLE_POLL_INITIAL_SECONDS
@@ -215,8 +214,8 @@ discover_live_gateway() {
   local selected=""
   if ! candidates="$(az resource list \
     --subscription "$subscription_id" \
-    --resource-type Microsoft.ApiManagement/service \
-    --query "[?tags.\"azd-env-name\"=='${environment_name}' && sku.name=='AIGateway'].[name,resourceGroup,location]" \
+    --resource-type Microsoft.ApiManagement/aigateways \
+    --query "[?tags.\"azd-env-name\"=='${environment_name}' && sku.name=='Consumption'].[name,resourceGroup,location]" \
     -o tsv)"; then
     fail "could not discover AI Gateway resources for azd environment ${environment_name}."
   fi
@@ -229,7 +228,7 @@ discover_live_gateway() {
     selected="${candidate_name}"$'\t'"${candidate_group}"$'\t'"${candidate_location}"
   done <<< "$candidates"
   if [ "$count" -gt 1 ]; then
-    fail "found multiple AIGateway services tagged azd-env-name=${environment_name}; set AI_GATEWAY_NAME and AI_GATEWAY_RESOURCE_GROUP explicitly."
+    fail "found multiple AI Gateways tagged azd-env-name=${environment_name}; set AI_GATEWAY_NAME and AI_GATEWAY_RESOURCE_GROUP explicitly."
   fi
   if [ "$count" -eq 1 ]; then
     IFS=$'\t' read -r gateway_name resource_group gateway_location <<< "$selected"
@@ -309,7 +308,7 @@ adopt_failure_target() {
   target_name="$(printf '%s' "$target_id" | cut -d/ -f9)"
   if [ "$(printf '%s' "$target_subscription" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$subscription_id" | tr '[:upper:]' '[:lower:]')" ] ||
     [ "$(printf '%s' "$target_provider" | tr '[:upper:]' '[:lower:]')" != "microsoft.apimanagement" ] ||
-    [ "$(printf '%s' "$target_type" | tr '[:upper:]' '[:lower:]')" != "service" ] ||
+    [ "$(printf '%s' "$target_type" | tr '[:upper:]' '[:lower:]')" != "aigateways" ] ||
     ! validate_deterministic_shape "$target_name" "$target_group"; then
     return 1
   fi
@@ -355,13 +354,12 @@ live_is_deleting() {
 }
 
 validate_live_ownership() {
-  [ "$live_sku" = "AIGateway" ] ||
-    fail "refusing ${resource_group}/${gateway_name}; expected SKU AIGateway but found ${live_sku:-unknown}."
+  [ "$live_sku" = "Consumption" ] ||
+    fail "refusing ${resource_group}/${gateway_name}; expected SKU Consumption but found ${live_sku:-unknown}."
   [ "$live_owner" = "$environment_name" ] ||
     fail "refusing ${resource_group}/${gateway_name}; expected azd-env-name=${environment_name} but found ${live_owner:-missing}."
   if [ -n "$live_location" ] && [ "$live_location" != "null" ]; then
     gateway_location="$(normalize_location "$live_location")"
-    deleted_service_uri="https://management.azure.com/subscriptions/${subscription_id}/providers/Microsoft.ApiManagement/locations/${gateway_location}/deletedservices/${gateway_name}?api-version=${DELETED_SERVICE_API_VERSION}"
   fi
 }
 
@@ -372,7 +370,7 @@ delete_live_gateway() {
     fail "Azure rejected deletion of ${resource_group}/${gateway_name}."
 }
 
-settle_deleted_gateway() {
+settle_gateway() {
   local quiet_start="$1"
   local failure_id="$2"
   local started_at
@@ -381,13 +379,10 @@ settle_deleted_gateway() {
   local elapsed
   local status
   local surfaces_clear
-  local live_present
   started_at="$(now_epoch)"
   while true; do
     surfaces_clear=true
-    live_present=false
     if load_live_record; then
-      live_present=true
       validate_live_ownership
       surfaces_clear=false
       quiet_start="$(now_epoch)"
@@ -403,34 +398,18 @@ settle_deleted_gateway() {
       [ "$status" -eq 4 ] || exit "$status"
     fi
 
-    if [ "$live_present" = false ]; then
-      if deleted_service_id="$(rest_get "$deleted_service_uri" "properties.serviceId")"; then
-        surfaces_clear=false
-        if [ "$(printf '%s' "$deleted_service_id" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$service_resource_id" | tr '[:upper:]' '[:lower:]')" ]; then
-          fail "refusing to purge soft-deleted AI Gateway ${gateway_name}; its original serviceId is ${deleted_service_id:-missing}, expected ${service_resource_id}."
-        fi
-        echo "Purging soft-deleted AI Gateway ${gateway_name} in ${gateway_location}."
-        rest_delete "$deleted_service_uri" ||
-          fail "Azure rejected purge of soft-deleted AI Gateway ${gateway_name}."
-        quiet_start="$(now_epoch)"
-      else
-        status=$?
-        [ "$status" -eq 4 ] || exit "$status"
-      fi
-    fi
-
     current="$(now_epoch)"
     elapsed=$((current - quiet_start))
     if [ "$surfaces_clear" = true ] && [ "$elapsed" -ge "$identity_settle_seconds" ]; then
       write_marker "settled" "$current" "$failure_id"
-      echo "AI Gateway deletion, soft-delete purge, and ${identity_settle_seconds}s identity settle window completed."
+      echo "AI Gateway deletion and ${identity_settle_seconds}s identity settle window completed."
       return 0
     fi
     if [ $((current - started_at)) -ge "$operation_timeout_seconds" ]; then
       write_marker "pending" "$quiet_start" "$failure_id"
-      fail "Azure exposes no authoritative managed-identity tombstone endpoint, and cleanup did not remain quiet for ${identity_settle_seconds}s within the ${operation_timeout_seconds}s bound. Wait, then rerun 'azd provision'. If FailedIdentityOperation persists, run 'azd down' and retry 'azd up'; the postdown hook will retry the APIM purge."
+      fail "cleanup did not remain quiet for ${identity_settle_seconds}s within the ${operation_timeout_seconds}s bound. Wait, then rerun 'azd provision'. If FailedIdentityOperation persists, run 'azd down' and retry 'azd up'."
     fi
-    echo "Waiting for APIM deletion and managed-identity cleanup (${elapsed}/${identity_settle_seconds}s quiet)."
+    echo "Waiting for AI Gateway deletion and managed-identity cleanup (${elapsed}/${identity_settle_seconds}s quiet)."
     sleep_for "$delay"
     delay="$(next_delay "$delay")"
   done
@@ -491,9 +470,8 @@ fi
   fail "both AI_GATEWAY_RESOURCE_GROUP and AI_GATEWAY_NAME are required once a lifecycle candidate is found."
 
 gateway_location="$(normalize_location "$gateway_location")"
-service_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}"
+service_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/aigateways/${gateway_name}"
 service_uri="https://management.azure.com${service_resource_id}?api-version=${AI_GATEWAY_API_VERSION}"
-deleted_service_uri="https://management.azure.com/subscriptions/${subscription_id}/providers/Microsoft.ApiManagement/locations/${gateway_location}/deletedservices/${gateway_name}?api-version=${DELETED_SERVICE_API_VERSION}"
 
 live_exists=false
 if load_live_record; then
@@ -543,9 +521,8 @@ else
     quiet_start="$marker_action_epoch"
   elif [ "$marker_state" = "settled" ]; then
     if find_recent_identity_failure && [ "$recent_failure_id" != "$marker_failure_id" ]; then
-      service_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}"
+      service_resource_id="/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/aigateways/${gateway_name}"
       service_uri="https://management.azure.com${service_resource_id}?api-version=${AI_GATEWAY_API_VERSION}"
-      deleted_service_uri="https://management.azure.com/subscriptions/${subscription_id}/providers/Microsoft.ApiManagement/locations/${gateway_location}/deletedservices/${gateway_name}?api-version=${DELETED_SERVICE_API_VERSION}"
       quiet_start="$(now_epoch)"
     else
       echo "Previous AI Gateway cleanup is already settled; no lifecycle wait is needed."
@@ -557,4 +534,4 @@ else
   write_marker "pending" "$quiet_start" "$(first_value "$recent_failure_id" "$marker_failure_id")"
 fi
 
-settle_deleted_gateway "$quiet_start" "$(first_value "$recent_failure_id" "$marker_failure_id")"
+settle_gateway "$quiet_start" "$(first_value "$recent_failure_id" "$marker_failure_id")"

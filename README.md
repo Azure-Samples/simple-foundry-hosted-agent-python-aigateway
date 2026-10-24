@@ -76,7 +76,7 @@ azd up
 azd ai agent invoke "Create a concise daily repo digest for microsoft/agent-framework."
 ```
 
-If Azure leaves a failed AI Gateway after an activation or managed-identity conflict, rerun `azd up`. The preprovision hook deletes only the terminal-Failed `AIGateway` tagged for the current azd environment, purges its APIM soft-delete record, and waits for identity cleanup. `azd down` performs the same bounded purge and settle process in its postdown hook. If the bound expires, follow the exact retry guidance printed by the hook rather than relying on name availability alone.
+If Azure leaves a failed AI Gateway after an activation or managed-identity conflict, rerun `azd up`. The preprovision hook deletes only the terminal-Failed `Microsoft.ApiManagement/aigateways` resource tagged for the current azd environment and waits for identity cleanup. `azd down` performs the same bounded settle process in its postdown hook. If the bound expires, follow the exact retry guidance printed by the hook rather than relying on name availability alone.
 
 Run the scheduled digest immediately:
 

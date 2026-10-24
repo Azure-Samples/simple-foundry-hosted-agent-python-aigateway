@@ -19,6 +19,14 @@ assert_contains() {
     fail "expected '$expected' in $file"
 }
 
+assert_not_contains() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fq "$unexpected" "$file"; then
+    fail "did not expect '$unexpected' in $file"
+  fi
+}
+
 assert_file_value() {
   local file="$1"
   local expected="$2"
@@ -107,7 +115,7 @@ if [ "${1:-}" = "deployment" ] && [ "${2:-}" = "operation" ] && [ "${3:-}" = "su
       printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Resources/deployments/ai-gateway-test\n' \
         "$subscription_id" "$resource_group"
     else
-      printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s\n' \
+      printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/aigateways/%s\n' \
         "$subscription_id" "$resource_group" "$gateway_name"
     fi
   fi
@@ -115,7 +123,7 @@ if [ "${1:-}" = "deployment" ] && [ "${2:-}" = "operation" ] && [ "${3:-}" = "su
 fi
 
 if [ "${1:-}" = "deployment" ] && [ "${2:-}" = "operation" ] && [ "${3:-}" = "group" ]; then
-  printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s\n' \
+  printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/aigateways/%s\n' \
     "$subscription_id" "$resource_group" "$gateway_name"
   exit 0
 fi
@@ -145,24 +153,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$uri" in
-  *"/deletedservices/${gateway_name}?"*)
-    if [ "$method" = "get" ]; then
-      if [ "$(read_state deleted 0)" = "1" ]; then
-        if [ -n "$query" ]; then
-          printf '%s\n' "${STUB_TOMBSTONE_SERVICE_ID:-/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}}"
-        fi
-        exit 0
-      fi
-      echo "Status Code: 404 NotFound" >&2
-      exit 1
-    fi
-    if [ "$method" = "delete" ]; then
-      printf '0' > "$state_dir/deleted"
-      increment purge_count
-      exit 0
-    fi
-    ;;
-  *"/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/service/${gateway_name}?"*)
+  *"/resourceGroups/${resource_group}/providers/Microsoft.ApiManagement/aigateways/${gateway_name}?"*)
     if [ "$method" = "get" ]; then
       if [ "$(read_state live 0)" != "1" ]; then
         echo "Status Code: 404 ResourceNotFound" >&2
@@ -171,7 +162,7 @@ case "$uri" in
       if [ -n "$query" ]; then
         printf '%s|%s|%s|%s|%s\n' \
           "$(read_state provisioning_state Succeeded)" \
-          "$(read_state sku AIGateway)" \
+          "$(read_state sku Consumption)" \
           "$(read_state owner "$environment_name")" \
           "$location" \
           "$(read_state target_state null)"
@@ -188,9 +179,6 @@ case "$uri" in
         printf 'Deleting' > "$state_dir/target_state"
       else
         printf '0' > "$state_dir/live"
-      fi
-      if [ "${STUB_CREATE_SOFT_DELETE:-1}" = "1" ]; then
-        printf '1' > "$state_dir/deleted"
       fi
       increment delete_count
       exit 0
@@ -209,8 +197,7 @@ new_case() {
   case_dir="$temp_root/$name"
   mkdir -p "$case_dir"
   printf '0' > "$case_dir/live"
-  printf '0' > "$case_dir/deleted"
-  printf 'AIGateway' > "$case_dir/sku"
+  printf 'Consumption' > "$case_dir/sku"
   printf 'tues' > "$case_dir/owner"
   printf 'Succeeded' > "$case_dir/provisioning_state"
   output_file="$case_dir/output"
@@ -276,7 +263,6 @@ run_lifecycle_without_gateway_values prepare
 unset STUB_DISCOVERY_ENABLED
 assert_file_value "$case_dir/live" 0
 assert_file_value "$case_dir/delete_count" 1
-assert_file_value "$case_dir/purge_count" 1
 assert_contains "$output_file" "Recovering terminal-Failed"
 
 new_case failed-owned
@@ -284,12 +270,9 @@ printf '1' > "$case_dir/live"
 printf 'Failed' > "$case_dir/provisioning_state"
 run_lifecycle prepare
 assert_file_value "$case_dir/live" 0
-assert_file_value "$case_dir/deleted" 0
 assert_file_value "$case_dir/delete_count" 1
-assert_file_value "$case_dir/purge_count" 1
 assert_contains "$marker_file" "state=settled"
 assert_contains "$output_file" "Recovering terminal-Failed"
-assert_contains "$output_file" "Purging soft-deleted AI Gateway"
 
 new_case failed-owned-deleting-transition
 printf '1' > "$case_dir/live"
@@ -339,13 +322,11 @@ fi
 [ ! -f "$case_dir/delete_count" ] || fail "mismatched gateway was deleted"
 assert_contains "$error_file" "expected azd-env-name=tues"
 
-new_case postdown-purge
+new_case postdown-delete
 printf '1' > "$case_dir/live"
 run_lifecycle cleanup
 assert_file_value "$case_dir/live" 0
-assert_file_value "$case_dir/deleted" 0
 assert_file_value "$case_dir/delete_count" 1
-assert_file_value "$case_dir/purge_count" 1
 assert_contains "$marker_file" "state=settled"
 
 new_case recent-identity-failure
@@ -382,17 +363,6 @@ run_lifecycle_without_gateway_values cleanup
 [ ! -f "$marker_file" ] || fail "empty postdown created a lifecycle marker"
 assert_contains "$output_file" "no lifecycle cleanup is needed"
 
-new_case mismatched-tombstone
-printf '1' > "$case_dir/deleted"
-STUB_TOMBSTONE_SERVICE_ID=/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-other-abc12345-gateway/providers/Microsoft.ApiManagement/service/aigw-abc12345
-export STUB_TOMBSTONE_SERVICE_ID
-if run_lifecycle prepare; then
-  fail "mismatched tombstone was purged"
-fi
-unset STUB_TOMBSTONE_SERVICE_ID
-[ ! -f "$case_dir/purge_count" ] || fail "mismatched tombstone was purged"
-assert_contains "$error_file" "refusing to purge soft-deleted AI Gateway"
-
 new_case settle-exhausted
 cat > "$marker_file" <<'MARKER'
 version=1
@@ -411,24 +381,30 @@ if run_lifecycle prepare; then
   fail "identity settle exhaustion reported success"
 fi
 unset TEST_SETTLE_SECONDS TEST_TIMEOUT_SECONDS
-assert_contains "$error_file" "Azure exposes no authoritative managed-identity tombstone endpoint"
+assert_contains "$error_file" "cleanup did not remain quiet"
 assert_contains "$error_file" "rerun 'azd provision'"
 assert_contains "$error_file" "run 'azd down'"
 assert_contains "$marker_file" "state=pending"
 
 for token in \
   "2025-09-01-preview" \
-  "2024-05-01" \
-  "AIGateway" \
+  "Microsoft.ApiManagement/aigateways" \
+  "Consumption" \
   "azd-env-name" \
   "FailedIdentityOperation" \
   "ActivationFailed" \
   "If-Match=*" \
-  "managed-identity tombstone endpoint" \
   "APIM_LIFECYCLE_IDENTITY_SETTLE_SECONDS" \
   "APIM_LIFECYCLE_OPERATION_TIMEOUT_SECONDS"; do
   assert_contains "$lifecycle_script" "$token"
   assert_contains "$powershell_script" "$token"
+done
+for legacy_contract in \
+  "Microsoft.ApiManagement/service" \
+  "deletedservices" \
+  "AIGateway"; do
+  assert_not_contains "$lifecycle_script" "$legacy_contract"
+  assert_not_contains "$powershell_script" "$legacy_contract"
 done
 
 assert_contains "$repo_root/azure.yaml" "postdown:"
@@ -436,5 +412,13 @@ assert_contains "$repo_root/azure.yaml" "manage-ai-gateway-lifecycle.sh cleanup"
 assert_contains "$repo_root/azure.yaml" "manage-ai-gateway-lifecycle.ps1 cleanup"
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.sh" "manage-ai-gateway-lifecycle.sh\" prepare"
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.ps1" "manage-ai-gateway-lifecycle.ps1\") prepare"
+for postprovision_script in \
+  "$repo_root/infra/scripts/configure-ai-gateway.sh" \
+  "$repo_root/infra/scripts/configure-ai-gateway.ps1"; do
+  assert_contains "$postprovision_script" "Microsoft.ApiManagement/aigateways"
+  assert_contains "$postprovision_script" "Microsoft.ApiManagement/service"
+  assert_contains "$postprovision_script" "frontend.defaultHostname"
+  assert_contains "$postprovision_script" "/default/models/openai/v1/chat/completions"
+done
 
 echo "APIM lifecycle tests passed."
