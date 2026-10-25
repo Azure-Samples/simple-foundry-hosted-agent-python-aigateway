@@ -47,6 +47,25 @@ if [ "$gateway_sku" != "Consumption" ]; then
   exit 1
 fi
 
+monitoring_ingestion_mode="$(jq -r '
+  .resources[]
+  | select(.type == "Microsoft.Insights/components")
+  | .properties.AzureMonitorWorkspaceIngestionMode
+' "$compiled_template")"
+if [ "$monitoring_ingestion_mode" != "Enabled" ]; then
+  echo "Gateway Application Insights must enable Azure Monitor workspace ingestion mode." >&2
+  echo "Actual: $monitoring_ingestion_mode" >&2
+  exit 1
+fi
+
+if jq -e '
+  .resources[]
+  | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters")
+' "$compiled_template" >/dev/null; then
+  echo "The legacy Bicep telemetry exporter must be configured by the postprovision hook." >&2
+  exit 1
+fi
+
 actual_aliases="$(jq -r '
   .resources[]
   | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/aliases")
@@ -81,6 +100,16 @@ az bicep build \
   --file "$repo_root/infra/main.bicep" \
   --outfile "$compiled_root_template" \
   >/dev/null
+
+for output_name in \
+  AI_GATEWAY_APP_INSIGHTS_ID \
+  AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID \
+  AI_GATEWAY_PRINCIPAL_ID; do
+  if [ "$(jq -r --arg name "$output_name" '.outputs | has($name)' "$compiled_root_template")" != "true" ]; then
+    echo "Root Bicep must output $output_name for native OpenTelemetry postprovision." >&2
+    exit 1
+  fi
+done
 
 root_alias_input="$(jq -r '
   .. | objects
@@ -138,5 +167,26 @@ if [ "$mini_capacity" != "200" ]; then
   echo "Actual:   $mini_capacity" >&2
   exit 1
 fi
+
+for hook in \
+  "$repo_root/infra/scripts/configure-ai-gateway.sh" \
+  "$repo_root/infra/scripts/configure-ai-gateway.ps1"; do
+  for token in \
+    "Microsoft.Monitor" \
+    "DefaultDataCollectionRuleResourceId" \
+    "MetricsIngestionEndpoint" \
+    "LogsIngestionEndpoint" \
+    "TracesIngestionEndpoint" \
+    "3913510d-42f4-4e42-8a64-420c390055eb" \
+    "OpenTelemetry" \
+    "https://monitor.azure.com" \
+    "telemetryExporters/applicationInsights"; do
+    if ! grep -Fq "$token" "$hook"; then
+      echo "The postprovision hook is missing native OpenTelemetry monitoring configuration: $token" >&2
+      echo "Hook: $hook" >&2
+      exit 1
+    fi
+  done
+done
 
 echo "AI Gateway model registration test passed."
