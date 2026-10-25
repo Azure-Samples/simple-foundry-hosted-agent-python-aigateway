@@ -1,5 +1,7 @@
 # Foundry model account
 
+Run the commands in this README from the `infra/foundry-models/` directory.
+
 [`main.bicep`](main.bicep) deploys a model-serving Azure AI Services account
 with `allowProjectManagement: false` and `disableLocalAuth: true`. It creates
 the model deployments passed through the required `modelDeployments` array and
@@ -23,7 +25,7 @@ az group create --name rg-foundry-models --location eastus2
 
 az deployment group create \
   --resource-group rg-foundry-models \
-  --template-file infra/foundry-models/main.bicep \
+  --template-file ./main.bicep \
   --parameters location=eastus2 \
                aiServicesName=aimodels-example \
                principalId="$(az ad signed-in-user show --query id -o tsv)" \
@@ -44,4 +46,3 @@ Useful deployment outputs:
 - `aiServicesEndpoint`: endpoint used by the Gateway Foundry provider.
 - `modelDeploymentIds`: resource IDs for the deployments, in the same order as
   the `modelDeployments` input.
-

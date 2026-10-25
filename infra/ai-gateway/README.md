@@ -1,5 +1,7 @@
 # AI Gateway
 
+Run the commands in this README from the `infra/ai-gateway/` directory.
+
 [`main.bicep`](main.bicep) is a resource-group-scoped module for an AI Gateway
 with Consumption SKU. With the default `deployApimGatewayViaBicep: true`, it
 creates `Microsoft.ApiManagement/aigateways`, the
@@ -26,7 +28,7 @@ az group create --name rg-ai-gateway --location eastus2
 
 az deployment group create \
   --resource-group rg-ai-gateway \
-  --template-file infra/ai-gateway/main.bicep \
+  --template-file ./main.bicep \
   --parameters location=eastus2 gatewayName=aigw-example
 ```
 
@@ -118,7 +120,7 @@ EOF
 
 az deployment group create \
   --resource-group rg-ai-gateway \
-  --template-file infra/ai-gateway/main.bicep \
+  --template-file ./main.bicep \
   --parameters @/tmp/ai-gateway.parameters.json
 ```
 
@@ -127,7 +129,7 @@ script to add the GitHub MCP ToolServer and create the Foundry project
 connection and `repo-digest-tools` Toolbox:
 
 ```bash
-bash ./infra/scripts/configure-ai-gateway.sh
+bash ../scripts/configure-ai-gateway.sh
 ```
 
 See [the scripts README](../scripts/README.md) for required azd values and
@@ -135,4 +137,3 @@ GitHub authentication. A standalone Gateway deployment does not create the
 Foundry project; deploy the
 [Foundry agents module](../foundry-agents/README.md) as well before configuring
 the Toolbox.
-

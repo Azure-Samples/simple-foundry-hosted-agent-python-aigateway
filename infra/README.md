@@ -1,5 +1,7 @@
 # Infrastructure
 
+Run the commands in this README from the `infra/` directory.
+
 The subscription-scoped [`main.bicep`](main.bicep) template creates three
 resource groups and deploys one module into each:
 
@@ -18,8 +20,9 @@ resources.
 
 ## Deploy the full stack
 
-From the repository root, use `azd` to provision the infrastructure and run its
-hooks:
+`azd provision` also works from `infra/`: azd walks up to find
+[`../azure.yaml`](../azure.yaml), then provisions the full stack and runs its
+preprovision and postprovision hooks:
 
 ```bash
 azd provision
@@ -30,7 +33,7 @@ Alternatively, deploy the subscription-scoped Bicep template directly:
 ```bash
 az deployment sub create \
   --location eastus2 \
-  --template-file infra/main.bicep \
+  --template-file ./main.bicep \
   --parameters environmentName=dailydigest \
                location=eastus2 \
                principalId="$(az ad signed-in-user show --query id -o tsv)"
@@ -51,4 +54,3 @@ examples:
 - [Foundry project and hosted-agent runtime](foundry-agents/README.md)
 - [AI Gateway and model routing](ai-gateway/README.md)
 - [Lifecycle and postprovision scripts](scripts/README.md)
-

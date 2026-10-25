@@ -1,5 +1,7 @@
 # Foundry project and hosted-agent runtime
 
+Run the commands in this README from the `infra/foundry-agents/` directory.
+
 [`main.bicep`](main.bicep) creates a project-enabled Azure AI Services account
 (`allowProjectManagement: true`), a Foundry project, and its hosted-agent
 dependencies:
@@ -18,7 +20,7 @@ az group create --name rg-foundry-agents --location eastus2
 
 az deployment group create \
   --resource-group rg-foundry-agents \
-  --template-file infra/foundry-agents/main.bicep \
+  --template-file ./main.bicep \
   --parameters location=eastus2 \
                aiServicesName=aiagents-example \
                aiProjectName=repo-digest \
@@ -40,4 +42,3 @@ Useful deployment outputs:
 - `projectEndpoint`: Foundry project endpoint for clients and Toolbox setup.
 - `containerRegistryEndpoint`: ACR login server for hosted-agent images.
 - `aiProjectResourceId`: resource ID of the Foundry project.
-
