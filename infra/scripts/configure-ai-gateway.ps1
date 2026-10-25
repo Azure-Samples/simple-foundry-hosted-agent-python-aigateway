@@ -4,6 +4,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 $aiGatewayApiVersion = "2025-09-01-preview"
 $legacyAiGatewayApiVersion = "2025-09-01-preview"
 $foundryUserRoleId = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
+$monitoringMetricsPublisherRoleId = "3913510d-42f4-4e42-8a64-420c390055eb"
+$appInsightsApiVersion = "2020-02-02"
+$roleAssignmentsApiVersion = "2022-04-01"
 $defaultRepository = "microsoft/agent-framework"
 $githubMcpServer = "https://api.githubcopilot.com/mcp/"
 $githubMcpTools = "list_pull_requests,list_issues,actions_list"
@@ -123,6 +126,114 @@ function Test-GatewayModelRoute($GatewayUrl, $Model, $ApiKey) {
     }
 
     throw "AI Gateway model route failed. The route requires an explicit Api-Key header. Last error: $lastError"
+}
+
+function Configure-GatewayMonitoring($MonitoringEnabled, $GatewayResourceId, $SubscriptionId) {
+    if ($MonitoringEnabled -notmatch "^(true|1|yes)$") {
+        Write-Host "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter setup."
+        return
+    }
+
+    $gatewayAppInsightsId = Require-Value "AI_GATEWAY_APP_INSIGHTS_ID" (First-Value @($env:AI_GATEWAY_APP_INSIGHTS_ID, (Get-AzdValue "AI_GATEWAY_APP_INSIGHTS_ID")))
+    $logAnalyticsWorkspaceId = Require-Value "AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID" (First-Value @($env:AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID, (Get-AzdValue "AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID")))
+    $gatewayPrincipalId = Require-Value "AI_GATEWAY_PRINCIPAL_ID" (First-Value @($env:AI_GATEWAY_PRINCIPAL_ID, (Get-AzdValue "AI_GATEWAY_PRINCIPAL_ID")))
+
+    $providerState = [string](az provider show --namespace Microsoft.Monitor --query registrationState -o tsv 2>$null)
+    if ($providerState -ne "Registered") {
+        Write-Host "Registering the Microsoft.Monitor resource provider."
+        az provider register --namespace Microsoft.Monitor --wait | Out-Null
+    }
+
+    $appInsightsUri = "https://management.azure.com${gatewayAppInsightsId}?api-version=$appInsightsApiVersion"
+    $appInsightsProperties = $null
+    for ($attempt = 1; $attempt -le 60; $attempt++) {
+        try {
+            $appInsightsProperties = (az rest --method get --uri $appInsightsUri --query properties -o json 2>$null | ConvertFrom-Json)
+            if (-not [string]::IsNullOrWhiteSpace($appInsightsProperties.IngestionEndpoint) -and
+                -not [string]::IsNullOrWhiteSpace($appInsightsProperties.MetricsIngestionEndpoint) -and
+                -not [string]::IsNullOrWhiteSpace($appInsightsProperties.LogsIngestionEndpoint) -and
+                -not [string]::IsNullOrWhiteSpace($appInsightsProperties.TracesIngestionEndpoint) -and
+                -not [string]::IsNullOrWhiteSpace($appInsightsProperties.DefaultDataCollectionRuleResourceId)) {
+                break
+            }
+        } catch {
+            $appInsightsProperties = $null
+        }
+        Write-Host "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=$attempt."
+        Start-Sleep -Seconds 10
+    }
+    if ($null -eq $appInsightsProperties -or
+        [string]::IsNullOrWhiteSpace($appInsightsProperties.IngestionEndpoint) -or
+        [string]::IsNullOrWhiteSpace($appInsightsProperties.MetricsIngestionEndpoint) -or
+        [string]::IsNullOrWhiteSpace($appInsightsProperties.LogsIngestionEndpoint) -or
+        [string]::IsNullOrWhiteSpace($appInsightsProperties.TracesIngestionEndpoint) -or
+        [string]::IsNullOrWhiteSpace($appInsightsProperties.DefaultDataCollectionRuleResourceId)) {
+        throw "Application Insights did not populate its managed DCR/DCE and OTLP endpoints."
+    }
+    if ($appInsightsProperties.WorkspaceResourceId -ne $logAnalyticsWorkspaceId) {
+        throw "AI Gateway Application Insights is not connected to the expected Log Analytics workspace."
+    }
+
+    $dcrScope = [string]$appInsightsProperties.DefaultDataCollectionRuleResourceId
+    $identityBytes = [Text.Encoding]::UTF8.GetBytes("$dcrScope|$gatewayPrincipalId|$monitoringMetricsPublisherRoleId")
+    $identityHash = [Security.Cryptography.SHA256]::HashData($identityBytes)
+    $roleAssignmentName = [guid]::new([byte[]]$identityHash[0..15]).ToString()
+    $roleAssignmentId = "$dcrScope/providers/Microsoft.Authorization/roleAssignments/$roleAssignmentName"
+    $roleDefinitionId = "/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/roleDefinitions/$monitoringMetricsPublisherRoleId"
+    $roleAssignmentBody = @{
+        properties = @{
+            principalId = $gatewayPrincipalId
+            principalType = "ServicePrincipal"
+            roleDefinitionId = $roleDefinitionId
+        }
+    }
+    Write-Host "Assigning Monitoring Metrics Publisher at the Application Insights managed DCR scope."
+    Invoke-AzRestPutJson "https://management.azure.com${roleAssignmentId}?api-version=$roleAssignmentsApiVersion" $roleAssignmentBody
+
+    $exporterUri = "https://management.azure.com${GatewayResourceId}/telemetryExporters/applicationInsights?api-version=$aiGatewayApiVersion"
+    $exporterExists = $true
+    try {
+        $exporterKind = [string](az rest --method get --uri $exporterUri --query properties.kind -o tsv 2>$null)
+    } catch {
+        $exporterExists = $false
+        $exporterKind = ""
+    }
+    if ($exporterExists -and $exporterKind -ne "OpenTelemetry") {
+        Write-Host "Replacing the legacy Application Insights exporter because exporter kind is immutable."
+        az rest --method delete --uri $exporterUri -o none
+        $exporterDeleted = $false
+        for ($attempt = 1; $attempt -le 30; $attempt++) {
+            if (-not (Test-AzRestResource $exporterUri)) {
+                $exporterDeleted = $true
+                break
+            }
+            Write-Host "Waiting for the legacy telemetry exporter deletion, attempt=$attempt."
+            Start-Sleep -Seconds 2
+        }
+        if (-not $exporterDeleted) {
+            throw "The legacy telemetry exporter was not deleted before recreation."
+        }
+    }
+
+    $exporterBody = @{
+        properties = @{
+            kind = "OpenTelemetry"
+            payloadCapture = $false
+            applicationInsights = @{
+                resourceId = $gatewayAppInsightsId
+            }
+            openTelemetry = @{
+                metricsEndpoint = [string]$appInsightsProperties.MetricsIngestionEndpoint
+                logsEndpoint = [string]$appInsightsProperties.LogsIngestionEndpoint
+                tracesEndpoint = [string]$appInsightsProperties.TracesIngestionEndpoint
+                managedIdentity = @{
+                    resource = "https://monitor.azure.com"
+                }
+            }
+        }
+    }
+    Write-Host "Configuring the native OpenTelemetry exporter for AI Gateway."
+    Invoke-AzRestPutJson $exporterUri $exporterBody
 }
 
 function Prepare-BicepRbac {
@@ -273,6 +384,9 @@ $providerAuth = [string](az rest --method get --uri $providerUri --query propert
 if ($providerAuth -ne "ManagedIdentity") {
     throw "Bicep did not configure the Foundry provider for managed identity."
 }
+
+$monitoringEnabled = First-Value @($env:ENABLE_MONITORING, (Get-AzdValue "ENABLE_MONITORING"), "true")
+Configure-GatewayMonitoring $monitoringEnabled $gatewayResourceId $subscriptionId
 
 Remove-AzdEnvValues @("GITHUB_MCP_TOKEN", "GITHUB_TOKEN")
 $githubToken = ""

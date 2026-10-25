@@ -26,7 +26,8 @@ Functions application.
 - `infra/foundry-agents/main.bicep` creates the agent project, storage,
   Container Registry, monitoring, connections, and RBAC.
 - `infra/ai-gateway/main.bicep` creates AI Gateway, its Connector Namespace,
-  model provider, model registrations, runtime key, and monitoring.
+  model provider, model registrations, runtime key, and workspace-based
+  Application Insights resource.
 - `chat.py` is a local console client for the Responses endpoint.
 
 The scheduled routine is named `daily-repo-digest`. It runs at 9 AM in the
@@ -279,7 +280,6 @@ The AI Gateway module uses the live `2025-09-01-preview` contracts:
 - `Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models`
 - `Microsoft.ApiManagement/aigateways/workspaces/aliases`
 - `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
-- `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
 - `Microsoft.ApiManagement/aigateways/apiKeys`
 - `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
@@ -290,6 +290,38 @@ ToolServer and supports connector-backed scenarios.
 The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
 collection before configuring the GitHub ToolServer.
+
+### Native OpenTelemetry monitoring
+
+AI Gateway monitoring is enabled by the root `enableMonitoring` parameter
+(`ENABLE_MONITORING`, default `true`). The gateway's workspace-based Application
+Insights component sets `AzureMonitorWorkspaceIngestionMode: Enabled`; Bicep
+suppresses BCP037 for this preview property. The deployment exports
+`AI_GATEWAY_APP_INSIGHTS_ID`, `AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID`, and
+`AI_GATEWAY_PRINCIPAL_ID` for the postprovision hook.
+
+The hook registers `Microsoft.Monitor` when needed and polls the Application
+Insights resource until its managed DCR/DCE and `IngestionEndpoint`,
+`MetricsIngestionEndpoint`, `LogsIngestionEndpoint`, `TracesIngestionEndpoint`,
+and `DefaultDataCollectionRuleResourceId` are populated. It grants the Gateway
+system identity **Monitoring Metrics Publisher**
+(`3913510d-42f4-4e42-8a64-420c390055eb`) at that generated DCR scope.
+
+The role assignment must be created with a direct ARM role-assignment PUT from
+the `azd` postprovision hook. The generated managed resource group has a deny
+assignment that blocks creating this nested role assignment through ARM/Bicep.
+The hook then configures
+`Microsoft.ApiManagement/aigateways/{gatewayName}/telemetryExporters/applicationInsights`
+as `kind: OpenTelemetry`, with the Application Insights resource ID, OTLP signal
+endpoints, and managed-identity audience `https://monitor.azure.com`. Metrics
+and logs are sufficient for portal dashboard eligibility; the preview service
+may omit a supplied `tracesEndpoint` from exporter GET responses.
+
+Exporter `kind` is immutable. When replacing an existing legacy
+`applicationInsights` exporter, the hook deletes it before creating the native
+OpenTelemetry exporter. Do not restore an inline Bicep exporter: its endpoints
+and DCR-scoped authorization are only available after Application Insights has
+provisioned its managed resources.
 
 The Foundry model provider uses:
 
