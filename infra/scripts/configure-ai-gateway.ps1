@@ -7,7 +7,6 @@ $foundryUserRoleId = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
 $defaultRepository = "microsoft/agent-framework"
 $githubMcpServer = "https://api.githubcopilot.com/mcp/"
 $githubMcpTools = "list_pull_requests,list_issues,actions_list"
-$toolboxConnectionName = "aigw-github"
 $toolboxName = "repo-digest-tools"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 
@@ -72,7 +71,7 @@ function Invoke-AzRestPutJson($Uri, $Body) {
 function Get-GatewayApiKeyValue($GatewayResourceId) {
     $listSecretsUri = "https://management.azure.com${GatewayResourceId}/apiKeys/default/listSecrets?api-version=$aiGatewayApiVersion"
     try {
-        $value = az rest --method post --uri $listSecretsUri --body "{}" --query "primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" -o tsv 2>$null
+        $value = az rest --method post --uri $listSecretsUri --body "{}" --query "key || primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" -o tsv 2>$null
         if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
     } catch {
         Write-Verbose "The current backend does not expose listSecrets; trying listValues."
@@ -369,16 +368,7 @@ azd env set GITHUB_REPOSITORY $githubRepository
 azd env set AZURE_AI_GATEWAY_API_KEY $gatewayApiKey | Out-Null
 azd env set TOOLBOX_NAME $toolboxName
 
-Write-Host "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
-azd ai connection create $toolboxConnectionName `
-    --kind remote-tool `
-    --target ($gatewayUrl.TrimEnd("/") + "/default/toolservers/github/mcp") `
-    --auth-type custom-keys `
-    --custom-key "Api-Key=$gatewayApiKey" `
-    --force `
-    --no-prompt `
-    --project-endpoint $projectEndpoint `
-    -o json | Out-Null
+Write-Host "Connecting Foundry Toolbox using the Bicep-provisioned aigw-github connection."
 
 $toolboxExists = $true
 try {

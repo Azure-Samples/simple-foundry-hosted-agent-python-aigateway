@@ -26,7 +26,8 @@ Functions application.
 - `infra/foundry-agents/main.bicep` creates the agent project, storage,
   Container Registry, monitoring, connections, and RBAC.
 - `infra/ai-gateway/main.bicep` creates AI Gateway, its Connector Namespace,
-  model provider, model registrations, runtime key, and monitoring.
+  model provider, model registrations, runtime key, and monitoring, and invokes
+  `infra/foundry-agents/github-connection.bicep` in the agents resource group.
 - `chat.py` is a local console client for the Responses endpoint.
 
 The scheduled routine is named `daily-repo-digest`. It runs at 9 AM in the
@@ -56,7 +57,7 @@ flowchart LR
 Model requests use
 `<gateway>/default/models/openai/v1/chat/completions` or the corresponding
 Responses route. Tool requests use
-`<gateway>/default/toolservers/github/mcp`.
+`<gateway>/default/mcp/github/mcp`.
 
 The agent does not call a Foundry model endpoint directly. This keeps model
 traffic behind AI Gateway policies. `FoundryChatClient` is intentionally not
@@ -71,9 +72,11 @@ Agent -> Foundry Toolbox -> AI Gateway -> GitHub MCP
 ```
 
 `toolbox.yaml` declares one MCP source backed by the `aigw-github` project
-connection. The postprovision hook stores the AI Gateway `Api-Key` in that
-connection. `FoundryToolbox` authenticates the agent-to-Toolbox request with
-Entra identity.
+connection. Bicep creates that `RemoteTool` / `CustomKeys` connection and stores
+the generated AI Gateway `Api-Key` in it. The postprovision hook creates
+`repo-digest-tools` through the Foundry data-plane API using that connection;
+it no longer runs `azd ai connection create`. `FoundryToolbox` authenticates
+the agent-to-Toolbox request with Entra identity.
 
 The GitHub source sets `require_approval: "never"` because all three exposed
 operations are read-only and the scheduled routine cannot pause for approval.
@@ -290,6 +293,36 @@ ToolServer and supports connector-backed scenarios.
 The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
 collection before configuring the GitHub ToolServer.
+
+The gateway module receives the agents account and project names from the
+Foundry module outputs, so it waits for project provisioning. Its nested
+connection module targets the agents resource group and depends on the gateway
+and `apiKeys/default`. The connection target is
+`<gateway>/default/mcp/github/mcp`, with `isSharedToAll: true` and
+`metadata.type: custom_MCP`. Stable resource names and incremental deployments
+allow repeated `azd up` runs to update the same connection.
+
+The preview key contract used by the deployment is
+`runtimeApiKey.listSecrets().key` at `2025-09-01-preview`. Bicep compiles this
+created-resource call to ARM `listSecrets(resourceId(...), apiVersion).key`
+and adds the key resource dependency. The value crosses the module boundary
+only through an `@secure()` parameter (`securestring` in ARM), never an output.
+The deploying identity needs permission to list the gateway key and write
+project connections in the agents resource group. Do not log resolved
+deployment parameters or run the hooks with shell tracing/debug logging.
+
+Both postprovision hooks still retrieve the key with `listSecrets` (preferring
+`key`, with legacy response-field and `listValues` compatibility fallbacks) and
+save `AZURE_AI_GATEWAY_API_KEY` to the local azd environment for
+`create-dev-env.sh`. They also inject the GitHub credential, check model-route
+readiness, and create the data-plane Toolbox if absent. Failed-resource
+recovery remains in the lifecycle scripts.
+
+Compilation and regression tests verify the ARM expression, secure parameter,
+dependencies, target, and absence of secret outputs. A fresh and repeated
+`azd up` against the live preview service are still required to validate its
+response contract and Toolbox attachment end to end; compilation alone cannot
+verify a service response.
 
 The Foundry model provider uses:
 

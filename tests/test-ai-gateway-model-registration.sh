@@ -139,4 +139,79 @@ if [ "$mini_capacity" != "200" ]; then
   exit 1
 fi
 
+if ! jq -e '
+  .resources[]
+  | select(.type == "Microsoft.Resources/deployments" and .properties.parameters.gatewayApiKey != null)
+  | . as $module
+  | .properties.template as $template
+  | .properties.parameters.gatewayApiKey.value as $key
+  | ($module.resourceGroup == "[parameters('\''foundryAgentsResourceGroupName'\'')]")
+    and ($module.properties.mode == "Incremental")
+    and ($module.condition | contains("deployApimGatewayViaBicep") and contains("foundryAgentsProjectName"))
+    and ($template.parameters.gatewayApiKey.type == "securestring")
+    and ($key == "[listSecrets(resourceId('\''Microsoft.ApiManagement/aigateways/apiKeys'\'', parameters('\''gatewayName'\''), '\''default'\''), '\''2025-09-01-preview'\'').key]")
+    and ($module.dependsOn | any(contains("Microsoft.ApiManagement/aigateways/apiKeys")))
+    and ($template.resources | length == 1)
+    and ($template.resources[0] |
+      .type == "Microsoft.CognitiveServices/accounts/projects/connections"
+      and .apiVersion == "2025-04-01-preview"
+      and (.name | contains("aigw-github"))
+      and .properties.category == "RemoteTool"
+      and .properties.authType == "CustomKeys"
+      and .properties.target == "[format('\''{0}/default/mcp/github/mcp'\'', variables('\''normalizedGatewayUrl'\''))]"
+      and .properties.credentials.keys["Api-Key"] == "[parameters('\''gatewayApiKey'\'')]"
+      and .properties.isSharedToAll == true
+      and .properties.metadata.type == "custom_MCP")
+' "$compiled_template" >/dev/null; then
+  echo "GitHub connection must use a secure key parameter, the MCP route, and depend on the generated key." >&2
+  exit 1
+fi
+
+if ! jq -e '
+  .resources[]
+  | select(.properties.parameters.foundryAgentsProjectName != null)
+  | (.properties.parameters.foundryAgentsResourceGroupName.value == "[variables('\''effectiveFoundryAgentsResourceGroupName'\'')]")
+    and (.properties.parameters.foundryAgentsAccountName.value | contains("outputs.aiServicesName.value"))
+    and (.properties.parameters.foundryAgentsProjectName.value | contains("outputs.aiProjectName.value"))
+    and (.dependsOn | any(contains("foundry-agents-")))
+' "$compiled_root_template" >/dev/null; then
+  echo "Gateway connection provisioning must wait for the Foundry agents project in its own resource group." >&2
+  exit 1
+fi
+
+if ! jq -e '
+  [.. | objects | .outputs? // {} | to_entries[]
+   | select((.value.value | tostring | test("listSecrets|listValues|parameters\\('\''gatewayApiKey'\''\\)"))
+            or (.key | test("(?i)^(gatewayApiKey|AI_GATEWAY_API_KEY|AZURE_AI_GATEWAY_API_KEY)$")))]
+  | length == 0
+' "$compiled_root_template" >/dev/null; then
+  echo "Gateway API key values must never be emitted in deployment outputs." >&2
+  exit 1
+fi
+
+for hook in "$repo_root/infra/scripts/configure-ai-gateway.sh" "$repo_root/infra/scripts/configure-ai-gateway.ps1"; do
+  if grep -Eq 'azd[[:space:]]+ai[[:space:]]+connection[[:space:]]+create|--custom-key' "$hook"; then
+    echo "Postprovision must not create the Bicep-owned connection or pass its key to a connection command." >&2
+    exit 1
+  fi
+  for token in \
+    '/apiKeys/default/listSecrets?' \
+    '--query "key || primaryKey' \
+    'azd env set AZURE_AI_GATEWAY_API_KEY' \
+    'toolServers/github' \
+    'GH_TOKEN' \
+    'azd ai toolbox show' \
+    'azd ai toolbox create'; do
+    if ! grep -Fq -- "$token" "$hook"; then
+      echo "Postprovision must preserve local key retrieval, GitHub registration, and Toolbox setup: $token" >&2
+      exit 1
+    fi
+  done
+done
+
+if ! grep -Fq 'project_connection_id: aigw-github' "$repo_root/toolbox.yaml"; then
+  echo "Toolbox must attach the Bicep-provisioned aigw-github connection." >&2
+  exit 1
+fi
+
 echo "AI Gateway model registration test passed."
