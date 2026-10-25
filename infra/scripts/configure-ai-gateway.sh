@@ -144,8 +144,8 @@ configure_gateway_monitoring() {
   local exporter_body
   local provider_state
 
-  case "${monitoring_enabled,,}" in
-    true|1|yes) ;;
+  case "$monitoring_enabled" in
+    true|TRUE|True|1|yes|YES|Yes) ;;
     *)
       echo "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter setup."
       return 0
