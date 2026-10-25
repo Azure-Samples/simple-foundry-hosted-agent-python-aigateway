@@ -429,4 +429,6 @@ Remove-AzdEnvValues @(
     "FOUNDRY_API_KEY"
 )
 
+& (Join-Path $repoRoot "scripts/create-dev-env.ps1") -Force
+
 Write-Host "AI Gateway setup complete. Bicep owns Azure resources; this hook injects the GitHub credential, connects Foundry Toolbox to AI Gateway, and saves the runtime key."

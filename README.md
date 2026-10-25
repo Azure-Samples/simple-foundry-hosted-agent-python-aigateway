@@ -39,14 +39,14 @@ follow **[Set up the GitHub credential](IMPLEMENTATION_NOTES.md#tighten-the-gith
 
 ## Run locally
 
-Create the local `.env` from the selected azd environment:
+`azd up` and `azd provision` automatically generate `.env` from the active azd environment. You can also refresh `.env` manually at any time:
 
 ```bash
 # macOS or Linux
-./scripts/create-dev-env.sh
+./scripts/create-dev-env.sh --force
 
 # Windows
-pwsh ./scripts/create-dev-env.ps1
+pwsh ./scripts/create-dev-env.ps1 -Force
 ```
 
 Start the agent:

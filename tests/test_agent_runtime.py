@@ -52,8 +52,22 @@ class AgentConstructionTests(unittest.TestCase):
         with patch.object(main, "ResponsesHostServer", return_value=server) as host_server:
             main.main()
 
-        host_server.assert_called_once_with(agent=main.build_agent, history_source="agent_server")
+        host_server.assert_called_once_with(agent=main.build_runtime_agent, history_source="agent_server")
         server.run.assert_called_once_with()
+
+    def test_build_runtime_agent_reloads_dotenv_locally(self) -> None:
+        sentinel = object()
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(main, "load_dotenv") as reload_dotenv,
+            patch.object(main, "build_agent", return_value=sentinel) as build_agent,
+        ):
+            os.environ.pop("FOUNDRY_HOSTING_ENVIRONMENT", None)
+            result = main.build_runtime_agent()
+
+        self.assertIs(result, sentinel)
+        reload_dotenv.assert_called_once_with(override=True)
+        build_agent.assert_called_once_with()
 
 
 class _UnsupportedListen:
