@@ -227,6 +227,9 @@ module aiGateway './ai-gateway/main.bicep' = {
     location: location
     gatewayLocation: aiGatewayLocation
     gatewayName: effectiveAiGatewayName
+    foundryAgentsResourceGroupName: foundryAgentsRg.name
+    foundryAgentsAccountName: foundryAgents.outputs.aiServicesName
+    foundryAgentsProjectName: foundryAgents.outputs.aiProjectName
     tags: tags
     enableMonitoring: true
     deployApimGatewayViaBicep: true
