@@ -102,13 +102,19 @@ param modelSkuName string = 'GlobalStandard'
 @description('Global Standard capacity assigned to the full model deployment.')
 param modelCapacity int = 20
 
+@description('Global Standard capacity assigned to the secondary full model deployment.')
+param secondaryModelCapacity int = 20
+
 @description('Global Standard capacity assigned to the mini model deployment. Capacity 200 supports ghapp requests that include large built-in tool schemas.')
 param miniModelCapacity int = 200
 
 @description('ARM-safe deployment and Gateway catalog name for the full model.')
 param modelDeploymentName string = 'gpt-latest'
 
-@description('Client-facing alias name for the primary model, with mini-model failover.')
+@description('ARM-safe deployment and Gateway catalog name for the secondary full model.')
+param secondaryModelDeploymentName string = 'gpt-6-sol'
+
+@description('Client-facing alias name for the primary model, with secondary and mini-model failover.')
 param modelAliasName string = 'gpt-latest'
 
 @description('Optional primary alias routes. Use unique modelArmName values, priority 0-100, and weight 1-100; same-priority weights split traffic.')
@@ -117,11 +123,17 @@ param modelAliasBackends array = []
 @description('Client-facing alias name for the mini model.')
 param miniModelAliasName string = 'gpt-mini-latest'
 
-@description('Backing Foundry model name for the full deployment. Use gpt-5.5 only when gpt-5.6-sol is unavailable.')
-param modelName string = 'gpt-5.6-sol'
+@description('Backing Foundry model name for the full deployment.')
+param modelName string = 'gpt-6.1-sol'
 
 @description('Foundry version for the full model deployment.')
-param modelVersion string = '2026-07-09'
+param modelVersion string = '2026-09-29'
+
+@description('Backing Foundry model name for the secondary full deployment.')
+param secondaryModelName string = 'gpt-6-sol'
+
+@description('Foundry version for the secondary full model deployment.')
+param secondaryModelVersion string = '2026-09-22'
 
 var resourceToken = take(toLower(uniqueString(subscription().id, environmentName, location)), 8)
 var environmentLabel = toLower(environmentName)
@@ -146,8 +158,13 @@ var effectiveModelAliasBackends = empty(modelAliasBackends) ? [
     weight: 100
   }
   {
-    modelArmName: miniModelDeploymentName
+    modelArmName: secondaryModelDeploymentName
     priority: 1
+    weight: 100
+  }
+  {
+    modelArmName: miniModelDeploymentName
+    priority: 2
     weight: 100
   }
 ] : modelAliasBackends
@@ -168,7 +185,16 @@ var gatewayModelDeployments = [
     modelVersion: modelVersion
     skuName: modelSkuName
     capacity: modelCapacity
-    description: 'Gateway registration for the latest supported full GPT model.'
+    description: 'Primary Gateway registration for the latest supported full GPT model.'
+  }
+  {
+    deploymentName: secondaryModelDeploymentName
+    modelName: secondaryModelName
+    modelFormat: modelFormat
+    modelVersion: secondaryModelVersion
+    skuName: modelSkuName
+    capacity: secondaryModelCapacity
+    description: 'Secondary Gateway registration for full-model failover in a separate quota pool.'
   }
 ]
 
@@ -256,7 +282,7 @@ module aiGateway './ai-gateway/main.bicep' = {
       {
         armName: 'primary-router'
         aliasName: modelAliasName
-        description: 'Primary model with automatic failover to the mini deployment.'
+        description: 'Primary model with automatic failover to the secondary full model and mini deployment.'
         backendModels: effectiveModelAliasBackends
       }
       {
@@ -318,6 +344,9 @@ output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelAliasName
 output AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT string = modelDeploymentName
 output AI_GATEWAY_INTERNAL_MODEL_NAME string = modelName
 output AI_GATEWAY_INTERNAL_MODEL_VERSION string = modelVersion
+output AI_GATEWAY_INTERNAL_SECONDARY_MODEL_DEPLOYMENT string = secondaryModelDeploymentName
+output AI_GATEWAY_INTERNAL_SECONDARY_MODEL_NAME string = secondaryModelName
+output AI_GATEWAY_INTERNAL_SECONDARY_MODEL_VERSION string = secondaryModelVersion
 output AI_GATEWAY_INTERNAL_MINI_MODEL_DEPLOYMENT string = miniModelDeploymentName
 output AI_GATEWAY_INTERNAL_MINI_MODEL_NAME string = miniModelName
 output AI_GATEWAY_INTERNAL_MINI_MODEL_VERSION string = miniModelVersion

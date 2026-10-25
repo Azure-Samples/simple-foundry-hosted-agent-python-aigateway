@@ -14,8 +14,14 @@ from agent_framework_foundry_hosting import ResponsesHostServer
 from repo_digest_agent import build_agent
 
 
+def build_runtime_agent():
+    if not os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
+        load_dotenv(override=True)
+    return build_agent()
+
+
 def main() -> None:
-    ResponsesHostServer(agent=build_agent, history_source="agent_server").run()
+    ResponsesHostServer(agent=build_runtime_agent, history_source="agent_server").run()
 
 
 if __name__ == "__main__":

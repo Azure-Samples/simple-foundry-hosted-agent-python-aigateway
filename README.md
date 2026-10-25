@@ -1,6 +1,6 @@
 # Daily Repo Digest with AI Gateway
 
-This sample runs a Microsoft Agent Framework repo-digest agent in Foundry Hosted Agents. Its model calls use AI Gateway, and Foundry Toolbox routes read-only GitHub MCP calls through AI Gateway.
+This sample demonstrates a **hub-and-spoke governance architecture** for Foundry Hosted Agents using **AI Gateway** as the central hub. The Microsoft Agent Framework repo-digest agent runs in an isolated Foundry project spoke (`infra/foundry-agents/`) with zero model deployments and no direct credentials to backing models or external MCP servers. All model inference (`gpt-latest` three-tier failover across `gpt-6.1-sol` → `gpt-6-sol` → `gpt-5.4-mini`, plus `gpt-mini-latest`) and read-only GitHub MCP tool calls (via Foundry Toolbox) are routed **exclusively through AI Gateway (`infra/ai-gateway/`)** — there is no other access path from the agent to the model account (`infra/foundry-models/`) or to GitHub MCP.
 
 ## Prerequisites
 
@@ -39,14 +39,14 @@ follow **[Set up the GitHub credential](IMPLEMENTATION_NOTES.md#tighten-the-gith
 
 ## Run locally
 
-Create the local `.env` from the selected azd environment:
+`azd up` and `azd provision` automatically generate `.env` from the active azd environment. You can also refresh `.env` manually at any time:
 
 ```bash
 # macOS or Linux
-./scripts/create-dev-env.sh
+./scripts/create-dev-env.sh --force
 
 # Windows
-pwsh ./scripts/create-dev-env.ps1
+pwsh ./scripts/create-dev-env.ps1 -Force
 ```
 
 Start the agent:
@@ -113,5 +113,9 @@ The default is `microsoft/agent-framework`. The included scheduled routine keeps
 ## How it works
 
 **Start with [`repo_digest_agent.py`](repo_digest_agent.py).** It connects the Agent Framework agent directly to the AI Gateway model route and uses Foundry Toolbox for the AI Gateway GitHub MCP route. [`github_mcp_middleware.py`](github_mcp_middleware.py) keeps GitHub results bounded, and [`main.py`](main.py) hosts the agent in Foundry.
+
+- **Hub (`infra/ai-gateway/`)**: Standalone AI Gateway (`Microsoft.ApiManagement/aigateways`) that enforces central routing, token rate limits, failover (`gpt-latest`), and MCP tool brokering (`toolServers/github`). Only AI Gateway's managed identity receives cross-resource runtime access to the model account through the configured Foundry User RBAC assignment. Only AI Gateway holds the GitHub MCP token.
+- **Agent Spoke (`infra/foundry-agents/`)**: Hosts the Foundry project, ACR, Storage, and Hosted Agent runtime. Its project account has no model deployments and no RBAC assignment on the separate model account, ensuring the agent cannot bypass AI Gateway to call models or GitHub MCP directly.
+- **Model Spoke (`infra/foundry-models/`)**: Dedicated model-only Azure AI Services account (`allowProjectManagement: false`, `disableLocalAuth: true`) hosting `gpt-6.1-sol`, `gpt-6-sol`, and `gpt-5.4-mini`, accessible to the agent only through AI Gateway.
 
 See [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md), including the [GitHub credential boundary](IMPLEMENTATION_NOTES.md#github-credential-boundary) and [how to tighten the GitHub credential to least privilege](IMPLEMENTATION_NOTES.md#tighten-the-github-credential-to-least-privilege), for architecture, authentication, AI Gateway contracts, security boundaries, configuration, monitoring, and deployment details.

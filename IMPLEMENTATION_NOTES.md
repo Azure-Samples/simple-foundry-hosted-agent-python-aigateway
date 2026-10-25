@@ -309,12 +309,13 @@ Each model registration includes:
   segment of the deployment resource ID
 
 Model creation omits inline policies for compatibility with the live RP. The
-alias `gpt-latest` routes to the full deployment at priority 0 and fails over to
-the mini deployment at priority 1. Both backends explicitly set a weight of 100;
-aliases can instead place multiple backends at the same priority with relative
-weights for traffic splitting. The separate `gpt-mini-latest` alias addresses
-the mini deployment directly. Each alias backend points to the gateway child
-model resource ID, while the client sends the alias name as the OpenAI `model`.
+alias `gpt-latest` routes through a three-tier failover chain: `gpt-6.1-sol` at
+priority 0, `gpt-6-sol` at priority 1, and `gpt-5.4-mini` at priority 2. Each
+backend explicitly sets a weight of 100; aliases can instead place multiple
+backends at the same priority with relative weights for traffic splitting. The
+separate `gpt-mini-latest` alias addresses the mini deployment directly. Each
+alias backend points to the gateway child model resource ID, while the client
+sends the alias name as the OpenAI `model`.
 
 ## Regions and model defaults
 
@@ -341,15 +342,19 @@ The AI Gateway preview region allowlist is:
 - `swedencentral`
 - `eastus2`
 
-The model defaults are:
+The model defaults use Global Standard deployments:
 
-| Purpose | Foundry deployment / Gateway alias | Backing model | Version | Capacity |
-| --- | --- | --- | --- | --- |
-| Full | `gpt-latest` | `gpt-5.6-sol` | `2026-07-09` | 20 |
-| Mini | `gpt-mini-latest` | `gpt-5.4-mini` | `2026-03-17` | 200 |
+| Purpose | Foundry deployment / Gateway alias | Backing model | Version | SKU | Capacity |
+| --- | --- | --- | --- | --- | --- |
+| Primary | `gpt-latest` | `gpt-6.1-sol` | `2026-09-29` | `GlobalStandard` | 20 |
+| Secondary failover | `gpt-6-sol` | `gpt-6-sol` | `2026-09-22` | `GlobalStandard` | 20 |
+| Mini safety net | `gpt-mini-latest` | `gpt-5.4-mini` | `2026-03-17` | `GlobalStandard` | 200 |
 
-If `gpt-5.6-sol` is unavailable, set `modelName=gpt-5.5` and
-`modelVersion=2026-04-24`.
+If the primary deployment is unavailable or its quota is exhausted, AI Gateway
+automatically tries `gpt-6-sol` in a separate quota pool, then the higher-
+capacity `gpt-5.4-mini` deployment. If a model/version is unavailable in the
+selected region, override its corresponding name and version parameters with a
+supported catalog deployment and keep the remaining fallback tiers configured.
 
 Global Standard deployment capacity is provisioned on the Foundry model
 account. Mini capacity 200 accommodates requests from the GitHub Copilot app,

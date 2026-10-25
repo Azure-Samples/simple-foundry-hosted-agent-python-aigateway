@@ -99,16 +99,31 @@ if [[ "$root_alias_input" != *"modelArmName"* ||
 fi
 
 default_alias_routes="$(jq -r '.variables.effectiveModelAliasBackends' "$compiled_root_template")"
-for token in \
-  "parameters('modelDeploymentName')" \
-  "parameters('miniModelDeploymentName')" \
-  "'priority', 0" \
-  "'priority', 1" \
-  "'weight', 100"; do
-  if ! grep -Fq "$token" <<< "$default_alias_routes"; then
-    echo "Default alias routes must configure primary/failover priority and explicit weight." >&2
-    echo "Missing: $token" >&2
+for route in \
+  "createObject('modelArmName', parameters('modelDeploymentName'), 'priority', 0, 'weight', 100)" \
+  "createObject('modelArmName', parameters('secondaryModelDeploymentName'), 'priority', 1, 'weight', 100)" \
+  "createObject('modelArmName', parameters('miniModelDeploymentName'), 'priority', 2, 'weight', 100)"; do
+  if ! grep -Fq "$route" <<< "$default_alias_routes"; then
+    echo "Default alias routes must configure all three backends with explicit priority and weight." >&2
+    echo "Missing: $route" >&2
     echo "Actual: $default_alias_routes" >&2
+    exit 1
+  fi
+done
+
+for setting in \
+  "modelName gpt-6.1-sol" \
+  "modelVersion 2026-09-29" \
+  "secondaryModelName gpt-6-sol" \
+  "secondaryModelVersion 2026-09-22" \
+  "miniModelName gpt-5.4-mini" \
+  "miniModelVersion 2026-03-17"; do
+  read -r parameter expected <<< "$setting"
+  actual="$(jq -r --arg parameter "$parameter" '.parameters[$parameter].defaultValue' "$compiled_root_template")"
+  if [ "$actual" != "$expected" ]; then
+    echo "Unexpected default for $parameter." >&2
+    echo "Expected: $expected" >&2
+    echo "Actual:   $actual" >&2
     exit 1
   fi
 done
