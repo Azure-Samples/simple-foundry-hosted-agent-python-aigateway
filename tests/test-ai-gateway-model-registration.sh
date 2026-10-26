@@ -30,11 +30,23 @@ actual_model_policies="$(jq -r '
   | select(.type == "Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models")
   | .properties.policies
 ' "$compiled_template")"
-if [ "$actual_model_policies" != "null" ]; then
-  echo "Gateway model PUTs must omit inline policies for the live RP contract." >&2
-  echo "Actual: $actual_model_policies" >&2
-  exit 1
-fi
+for policy_token in \
+  "tokenLimit" \
+  "period', 'minute" \
+  "count', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'tokenLimit'), 10000)" \
+  "counterKey', createArray('identity')" \
+  "contentSafety" \
+  "hateSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')" \
+  "selfHarmSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')" \
+  "sexualSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')" \
+  "violenceSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')"; do
+  if ! grep -Fq "$policy_token" <<< "$actual_model_policies"; then
+    echo "Gateway model PUTs must include identity-keyed token limits and Medium content safety." >&2
+    echo "Missing: $policy_token" >&2
+    echo "Actual: $actual_model_policies" >&2
+    exit 1
+  fi
+done
 
 gateway_sku="$(jq -r '
   .resources[]
@@ -137,9 +149,11 @@ root_model_input="$(jq -r '
 for token in \
   "OpenAIChatCompletions" \
   "/openai/v1/chat/completions" \
-  "/openai/v1/responses"; do
+  "/openai/v1/responses" \
+  "mul(variables('gatewayModelDeployments')[copyIndex('value')].capacity, 1000)" \
+  "'contentSafetySeverity', 'Medium'"; do
   if ! grep -Fq "$token" <<< "$root_model_input"; then
-    echo "Root model registrations must use the live RP API format and endpoint paths." >&2
+    echo "Root model registrations must use the live RP API, capacity-scaled token limits, and Medium content safety." >&2
     echo "Missing: $token" >&2
     echo "Actual: $root_model_input" >&2
     exit 1

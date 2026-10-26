@@ -323,6 +323,13 @@ print(json.dumps({
         "description": "Read-only GitHub tools for repository digests.",
         "type": "mcp",
         "failureMode": "failClosed",
+        "policies": [{
+            "type": "contentSafety",
+            "hateSeverity": "Medium",
+            "selfHarmSeverity": "Medium",
+            "sexualSeverity": "Medium",
+            "violenceSeverity": "Medium",
+        }],
         "endpoints": [{
             "namespace": "github",
             "kind": "mcp",
