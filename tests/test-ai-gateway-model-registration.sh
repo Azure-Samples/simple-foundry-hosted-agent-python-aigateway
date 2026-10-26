@@ -35,6 +35,11 @@ for policy_token in \
   "period', 'minute" \
   "count', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'tokenLimit'), 10000)" \
   "counterKey', createArray('identity')" \
+  "monthly-caller-budget" \
+  "costLimit" \
+  "period', 'month" \
+  "amount', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'costLimit'), 10)" \
+  "createObject('id', 'monthly-caller-budget', 'type', 'costLimit', 'period', 'month', 'amount', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'costLimit'), 10), 'counterKey', createArray('identity'))" \
   "contentSafety" \
   "hateSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')" \
   "selfHarmSeverity', coalesce(tryGet(parameters('foundryModels')[copyIndex()], 'contentSafetySeverity'), 'Medium')" \
@@ -151,6 +156,7 @@ for token in \
   "/openai/v1/chat/completions" \
   "/openai/v1/responses" \
   "mul(variables('gatewayModelDeployments')[copyIndex('value')].capacity, 1000)" \
+  "'costLimit', 0" \
   "'contentSafetySeverity', 'Medium'"; do
   if ! grep -Fq "$token" <<< "$root_model_input"; then
     echo "Root model registrations must use the live RP API, capacity-scaled token limits, and Medium content safety." >&2

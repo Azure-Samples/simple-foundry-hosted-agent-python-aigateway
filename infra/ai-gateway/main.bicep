@@ -154,6 +154,15 @@ resource foundryCatalogModels 'Microsoft.ApiManagement/aigateways/workspaces/mod
         ]
       }
       {
+        id: 'monthly-caller-budget'
+        type: 'costLimit'
+        period: 'month'
+        amount: model.?costLimit ?? 10
+        counterKey: [
+          'identity'
+        ]
+      }
+      {
         type: 'contentSafety'
         hateSeverity: model.?contentSafetySeverity ?? 'Medium'
         selfHarmSeverity: model.?contentSafetySeverity ?? 'Medium'

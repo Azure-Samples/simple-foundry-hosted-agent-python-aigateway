@@ -309,9 +309,10 @@ Each model registration includes:
   segment of the deployment resource ID
 
 Each catalog model has a per-minute `tokenLimit` policy keyed by `identity`,
-scaled to 1,000 times its Foundry deployment capacity, and a `contentSafety`
-policy with all four severities set to `Medium`. The GitHub MCP ToolServer also
-has a `contentSafety` policy with all four severities set to `Medium`; the
+scaled to 1,000 times its Foundry deployment capacity, a `costLimit` budget of
+`0.00` per month keyed by caller `identity`, and a `contentSafety` policy with
+all four severities set to `Medium`. The GitHub MCP ToolServer also has a
+`contentSafety` policy with all four severities set to `Medium`; the
 postprovision credential PUT preserves that policy. The alias `gpt-latest`
 routes through a three-tier failover chain: `gpt-6.1-sol` at
 priority 0, `gpt-6-sol` at priority 1, and `gpt-5.4-mini` at priority 2. Each
