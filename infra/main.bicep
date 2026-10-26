@@ -273,6 +273,9 @@ module aiGateway './ai-gateway/main.bicep' = {
       modelName: deployment.modelName
       modelVersion: deployment.modelVersion
       apiFormat: 'OpenAIChatCompletions'
+      tokenLimit: deployment.capacity * 1000
+      costLimit: 10
+      contentSafetySeverity: 'Medium'
       supportedEndpoints: [
         '/openai/v1/chat/completions'
         '/openai/v1/responses'

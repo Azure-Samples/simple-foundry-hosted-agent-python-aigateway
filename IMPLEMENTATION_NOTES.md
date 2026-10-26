@@ -308,8 +308,17 @@ Each model registration includes:
 - `deployment.modelName` set to the Foundry deployment name from the final
   segment of the deployment resource ID
 
-Model creation omits inline policies for compatibility with the live RP. The
-alias `gpt-latest` routes through a three-tier failover chain: `gpt-6.1-sol` at
+Each catalog model has a per-minute `tokenLimit` policy keyed by `identity`,
+scaled to 1,000 times its Foundry deployment capacity, a `costLimit` budget of
+`$10.00` per month keyed by caller `identity` (`id: monthly-caller-budget`),
+and a `contentSafety` policy with `Medium` thresholds for Hate, Self-Harm,
+Sexual, and Violence. With the default deployment capacities, `gpt-latest` and
+`gpt-6-sol` allow 20,000 tokens per minute per caller identity, while
+`gpt-mini-latest` allows 200,000. The GitHub MCP ToolServer also has a
+`contentSafety` policy with `Medium` thresholds for Hate, Self-Harm, Sexual,
+and Violence; the
+postprovision credential PUT preserves that policy. The alias `gpt-latest`
+routes through a three-tier failover chain: `gpt-6.1-sol` at
 priority 0, `gpt-6-sol` at priority 1, and `gpt-5.4-mini` at priority 2. Each
 backend explicitly sets a weight of 100; aliases can instead place multiple
 backends at the same priority with relative weights for traffic splitting. The

@@ -144,6 +144,32 @@ resource foundryCatalogModels 'Microsoft.ApiManagement/aigateways/workspaces/mod
       modelName: last(split(model.resourceId, '/'))
       modelVersion: model.?modelVersion ?? null
     }
+    policies: model.?policies ?? [
+      {
+        type: 'tokenLimit'
+        period: 'minute'
+        count: model.?tokenLimit ?? 10000
+        counterKey: [
+          'identity'
+        ]
+      }
+      {
+        id: 'monthly-caller-budget'
+        type: 'costLimit'
+        period: 'month'
+        amount: model.?costLimit ?? 10
+        counterKey: [
+          'identity'
+        ]
+      }
+      {
+        type: 'contentSafety'
+        hateSeverity: model.?contentSafetySeverity ?? 'Medium'
+        selfHarmSeverity: model.?contentSafetySeverity ?? 'Medium'
+        sexualSeverity: model.?contentSafetySeverity ?? 'Medium'
+        violenceSeverity: model.?contentSafetySeverity ?? 'Medium'
+      }
+    ]
   }
 }]
 
