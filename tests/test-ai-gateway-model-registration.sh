@@ -156,7 +156,7 @@ for token in \
   "/openai/v1/chat/completions" \
   "/openai/v1/responses" \
   "mul(variables('gatewayModelDeployments')[copyIndex('value')].capacity, 1000)" \
-  "'costLimit', 0" \
+  "'costLimit', 10" \
   "'contentSafetySeverity', 'Medium'"; do
   if ! grep -Fq "$token" <<< "$root_model_input"; then
     echo "Root model registrations must use the live RP API, capacity-scaled token limits, and Medium content safety." >&2

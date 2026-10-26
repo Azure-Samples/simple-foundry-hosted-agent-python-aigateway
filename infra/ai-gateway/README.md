@@ -17,6 +17,18 @@ configured aliases. The sample routes `gpt-latest` through three tiers:
 respectively, with weight 100 each). `gpt-mini-latest` targets the mini model
 directly.
 
+## Default Gateway policies
+
+Each registered model receives a per-caller `tokenLimit` of 1,000 times its
+deployment capacity per minute. With the sample capacities, `gpt-latest` and
+`gpt-6-sol` allow 20,000 tokens per minute, while `gpt-mini-latest` allows
+200,000. Each model also receives a `$10.00/month` `costLimit` per caller
+identity (`id: monthly-caller-budget`) and `Medium` `contentSafety` thresholds
+for Hate, Self-Harm, Sexual, and Violence. The postprovision configuration adds
+the same `Medium` content-safety thresholds to the `toolServers/github` MCP
+server. The `gpt-latest` alias routes through `gpt-6.1-sol` (priority 0),
+`gpt-6-sol` (priority 1), and `gpt-5.4-mini` (priority 2).
+
 ## Gateway without a Foundry provider
 
 Create a resource group, then deploy just the Gateway and Connector Namespace.
