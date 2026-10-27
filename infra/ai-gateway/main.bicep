@@ -21,7 +21,6 @@ param modelAliasesConfig array = []
 param toolServerConfigs object = {}
 
 var aiGatewayApiVersion = '2025-09-01-preview'
-var connectorGatewayApiVersion = '2026-05-01-preview'
 var appInsightsApiVersion = '2020-02-02'
 var logAnalyticsApiVersion = '2023-09-01'
 var telemetryWorkspaceName = 'default'
@@ -39,15 +38,6 @@ resource aiGateway 'Microsoft.ApiManagement/aigateways@2025-09-01-preview' = if 
     name: 'Consumption'
   }
   properties: {}
-}
-
-resource connectorNamespace 'Microsoft.Web/connectorGateways@2026-05-01-preview' = if (deployApimGatewayViaBicep) {
-  name: gatewayName
-  location: gatewayLocation
-  properties: {}
-  dependsOn: [
-    aiGateway
-  ]
 }
 
 #disable-next-line BCP081
@@ -190,7 +180,6 @@ resource runtimeApiKey 'Microsoft.ApiManagement/aigateways/apiKeys@2025-09-01-pr
 var modelAliasResourceIds = [for alias in modelAliasesConfig: resourceId('Microsoft.ApiManagement/aigateways/workspaces/aliases', gatewayName, telemetryWorkspaceName, alias.armName)]
 
 output apimGatewayId string = resourceId('Microsoft.ApiManagement/aigateways', gatewayName)
-output connectorNamespaceId string = deployApimGatewayViaBicep ? connectorNamespace.id : ''
 output appInsightsId string = enableMonitoring ? appInsights.id : ''
 output appInsightsName string = enableMonitoring ? appInsights.name : ''
 output logAnalyticsWorkspaceId string = enableMonitoring ? logAnalyticsWorkspace.id : ''
@@ -205,7 +194,6 @@ output defaultModelAliasName string = !empty(modelAliasesConfig) ? modelAliasesC
 output gatewayLocation string = gatewayLocation
 output apiVersions object = {
   aiGateway: aiGatewayApiVersion
-  connectorGateway: connectorGatewayApiVersion
   appInsights: appInsightsApiVersion
   logAnalytics: logAnalyticsApiVersion
 }
