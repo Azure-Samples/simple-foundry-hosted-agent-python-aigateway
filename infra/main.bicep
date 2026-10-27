@@ -332,7 +332,6 @@ output AI_GATEWAY_LOCATION string = aiGatewayLocation
 output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.apimGatewayId
 output AI_GATEWAY_MODEL_ALIAS_IDS array = aiGateway.outputs.modelAliasIds
 output AI_GATEWAY_DEFAULT_MODEL_ALIAS_NAME string = aiGateway.outputs.defaultModelAliasName
-output AI_GATEWAY_CONNECTOR_NAMESPACE_RESOURCE_ID string = aiGateway.outputs.connectorNamespaceId
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = aiGateway.outputs.foundryUserRoleAssignmentName
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
 output APPLICATION_INSIGHTS_NAME string = aiGateway.outputs.appInsightsName

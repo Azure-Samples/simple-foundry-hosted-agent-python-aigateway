@@ -25,7 +25,7 @@ Functions application.
   and deployments.
 - `infra/foundry-agents/main.bicep` creates the agent project, storage,
   Container Registry, monitoring, connections, and RBAC.
-- `infra/ai-gateway/main.bicep` creates AI Gateway, its Connector Namespace,
+- `infra/ai-gateway/main.bicep` creates AI Gateway,
   model provider, model registrations, runtime key, and monitoring.
 - `chat.py` is a local console client for the Responses endpoint.
 
@@ -263,7 +263,7 @@ The root deployment creates three resource groups:
 - `foundryagents` for the Foundry project, agent hosting, storage, Container
   Registry, and hosted-agent monitoring.
 - `foundrymodels` for the separate Foundry model account and deployments.
-- `gateway` for the standalone AI Gateway, Connector Namespace, Gateway
+- `gateway` for the standalone AI Gateway, Gateway
   monitoring, model provider, model registrations, and model aliases.
 
 The only cross-group runtime authorization is the AI Gateway system identity's
@@ -281,11 +281,10 @@ The AI Gateway module uses the live `2025-09-01-preview` contracts:
 - `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
 - `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
 - `Microsoft.ApiManagement/aigateways/apiKeys`
-- `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
-The Connector Namespace uses the same name, resource group, and location as
-the AI Gateway. It is a separate resource from the GitHub MCP
-ToolServer and supports connector-backed scenarios.
+`Microsoft.ApiManagement/aigateways` is a hidden resource type in the Azure
+Portal until the portal extension rollout completes. Check **Show hidden types**
+in the resource group view to see it.
 
 The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
@@ -322,7 +321,7 @@ sends the alias name as the OpenAI `model`.
 The default split is:
 
 - Foundry, storage, Container Registry, and monitoring: `eastus2`
-- AI Gateway and Connector Namespace: `eastus2`
+- AI Gateway: `eastus2`
 
 The Foundry region allowlist is:
 

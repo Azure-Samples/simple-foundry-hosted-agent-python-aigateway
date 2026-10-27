@@ -4,8 +4,7 @@ Run the commands in this README from the `infra/ai-gateway/` directory.
 
 [`main.bicep`](main.bicep) is a resource-group-scoped module for an AI Gateway
 with Consumption SKU. With the default `deployApimGatewayViaBicep: true`, it
-creates `Microsoft.ApiManagement/aigateways`, the
-`Microsoft.Web/connectorGateways` Connector Namespace, and `apiKeys/default`.
+creates `Microsoft.ApiManagement/aigateways` and `apiKeys/default`.
 When monitoring is enabled, it also provisions Log Analytics, Application
 Insights, and the Gateway telemetry exporter.
 
@@ -17,9 +16,13 @@ configured aliases. The sample routes `gpt-latest` through three tiers:
 respectively, with weight 100 each). `gpt-mini-latest` targets the mini model
 directly.
 
+> **Note:** `Microsoft.ApiManagement/aigateways` is a hidden resource type in
+> the Azure Portal until the portal extension rollout completes. In the
+> resource group view, check **Show hidden types** to see it.
+
 ## Gateway without a Foundry provider
 
-Create a resource group, then deploy just the Gateway and Connector Namespace.
+Create a resource group, then deploy just the Gateway.
 This minimal mode leaves `deployFoundryProvider` disabled, so it does not
 register model catalog entries or aliases:
 
