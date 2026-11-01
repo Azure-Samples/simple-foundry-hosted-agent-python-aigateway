@@ -162,7 +162,7 @@ case "$uri" in
       if [ -n "$query" ]; then
         printf '%s|%s|%s|%s|%s\n' \
           "$(read_state provisioning_state Succeeded)" \
-          "$(read_state sku Consumption)" \
+          "$(read_state sku Premium)" \
           "$(read_state owner "$environment_name")" \
           "$location" \
           "$(read_state target_state null)"
@@ -197,7 +197,7 @@ new_case() {
   case_dir="$temp_root/$name"
   mkdir -p "$case_dir"
   printf '0' > "$case_dir/live"
-  printf 'Consumption' > "$case_dir/sku"
+  printf 'Premium' > "$case_dir/sku"
   printf 'tues' > "$case_dir/owner"
   printf 'Succeeded' > "$case_dir/provisioning_state"
   output_file="$case_dir/output"
@@ -389,7 +389,7 @@ assert_contains "$marker_file" "state=pending"
 for token in \
   "2025-09-01-preview" \
   "Microsoft.ApiManagement/aigateways" \
-  "Consumption" \
+  "Premium" \
   "azd-env-name" \
   "FailedIdentityOperation" \
   "ActivationFailed" \

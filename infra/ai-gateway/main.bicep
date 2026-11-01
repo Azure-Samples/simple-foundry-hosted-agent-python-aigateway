@@ -36,7 +36,7 @@ resource aiGateway 'Microsoft.ApiManagement/aigateways@2025-09-01-preview' = if 
     type: 'SystemAssigned'
   }
   sku: {
-    name: 'Consumption'
+    name: 'Premium'
   }
   properties: {}
 }
