@@ -5,8 +5,8 @@ Run the commands in this README from the `infra/ai-gateway/` directory.
 [`main.bicep`](main.bicep) is a resource-group-scoped module for an AI Gateway
 with Premium SKU. With the default `deployApimGatewayViaBicep: true`, it
 creates `Microsoft.ApiManagement/aigateways` and `apiKeys/default`.
-When monitoring is enabled, it also provisions Log Analytics, Application
-Insights, and the Gateway telemetry exporter.
+When monitoring is enabled, it also provisions Log Analytics and a
+workspace-based Application Insights component (`AzureMonitorWorkspaceIngestionMode: Enabled`).
 
 When `deployFoundryProvider` is enabled, the module assigns the Gateway identity
 the Foundry User role on each account in `foundryResourceIds`, registers the
@@ -127,9 +127,37 @@ az deployment group create \
   --parameters @/tmp/ai-gateway.parameters.json
 ```
 
+## AI Gateway monitoring
+
+The AI Gateway module creates a workspace-based Application Insights component
+with `AzureMonitorWorkspaceIngestionMode: Enabled`. The property is not yet in
+the Bicep type for `Microsoft.Insights/components@2020-02-02`, so the template
+documents and suppresses BCP037 for that property.
+
+The `azd` postprovision hook configures native OpenTelemetry monitoring after
+Application Insights has created its managed DCR/DCE and OTLP endpoints:
+
+1. Register `Microsoft.Monitor` if it is not already registered.
+2. Wait for the Application Insights ingestion endpoints and managed DCR scope.
+3. Assign the Gateway system identity **Monitoring Metrics Publisher**
+   (`3913510d-42f4-4e42-8a64-420c390055eb`) at the generated DCR scope using a
+   direct ARM role-assignment PUT. The managed resource group's deny assignment
+   blocks creating this nested role assignment from ARM/Bicep.
+4. Create
+   `Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
+   as `kind: OpenTelemetry`, using the Application Insights resource ID, the
+   metrics/logs/traces OTLP endpoints, and `openTelemetry.credentials.managedIdentity`
+   audience `https://monitor.azure.com`.
+
+Exporter `kind` is immutable. The hook deletes an existing exporter with a
+different kind before recreating it as OpenTelemetry. The preview service can
+omit `tracesEndpoint` from exporter GET responses; metrics and logs are enough
+for the portal dashboard eligibility check.
+
 After the Gateway and Foundry project exist, run the postprovision configuration
-script to add the GitHub MCP ToolServer and create the Foundry project
-connection and `repo-digest-tools` Toolbox:
+script to configure native OpenTelemetry monitoring, add the GitHub MCP
+ToolServer, and create the Foundry project connection and `repo-digest-tools`
+Toolbox:
 
 ```bash
 bash ../scripts/configure-ai-gateway.sh

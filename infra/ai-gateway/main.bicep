@@ -24,7 +24,6 @@ var aiGatewayApiVersion = '2025-09-01-preview'
 var appInsightsApiVersion = '2020-02-02'
 var logAnalyticsApiVersion = '2023-09-01'
 var telemetryWorkspaceName = 'default'
-var telemetryExporterName = 'appinsights'
 var normalizedFoundryEndpoint = endsWith(foundryEndpoint, '/') ? foundryEndpoint : '${foundryEndpoint}/'
 #disable-next-line BCP081
 resource aiGateway 'Microsoft.ApiManagement/aigateways@2025-09-01-preview' = if (deployApimGatewayViaBicep) {
@@ -71,7 +70,7 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
   }
 }
 
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableMonitoring) {
+resource gatewayAppInsights 'Microsoft.Insights/components@2020-02-02' = if (enableMonitoring) {
   name: appInsightsName
   location: location
   kind: 'web'
@@ -79,20 +78,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableMoni
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalyticsWorkspace.id
-  }
-}
-
-#disable-next-line BCP081
-resource telemetryExporter 'Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters@2025-09-01-preview' = if (enableMonitoring && deployApimGatewayViaBicep) {
-  parent: defaultWorkspace
-  name: telemetryExporterName
-  properties: {
-    kind: 'applicationInsights'
-    payloadCapture: false
-    applicationInsights: {
-      connectionString: appInsights!.properties.ConnectionString
-      resourceId: appInsights!.id
-    }
+    #disable-next-line BCP037
+    AzureMonitorWorkspaceIngestionMode: 'Enabled'
   }
 }
 
@@ -180,11 +167,10 @@ resource runtimeApiKey 'Microsoft.ApiManagement/aigateways/apiKeys@2025-09-01-pr
 var modelAliasResourceIds = [for alias in modelAliasesConfig: resourceId('Microsoft.ApiManagement/aigateways/workspaces/aliases', gatewayName, telemetryWorkspaceName, alias.armName)]
 
 output apimGatewayId string = resourceId('Microsoft.ApiManagement/aigateways', gatewayName)
-output appInsightsId string = enableMonitoring ? appInsights.id : ''
-output appInsightsName string = enableMonitoring ? appInsights.name : ''
+output appInsightsId string = enableMonitoring ? gatewayAppInsights.id : ''
+output appInsightsName string = enableMonitoring ? gatewayAppInsights.name : ''
 output logAnalyticsWorkspaceId string = enableMonitoring ? logAnalyticsWorkspace.id : ''
 output logAnalyticsWorkspaceName string = enableMonitoring ? logAnalyticsWorkspace.name : ''
-output telemetryExporterId string = enableMonitoring && deployApimGatewayViaBicep ? telemetryExporter.id : ''
 output runtimeHostname string = deployApimGatewayViaBicep ? (aiGateway!.properties.?frontend.?defaultHostname ?? replace(aiGateway!.properties.?gatewayUrl ?? '', 'https://', '')) : ''
 output runtimeApiKeyId string = deployApimGatewayViaBicep ? runtimeApiKey.id : ''
 output gatewayPrincipalId string = deployApimGatewayViaBicep ? aiGateway!.identity.principalId : ''
