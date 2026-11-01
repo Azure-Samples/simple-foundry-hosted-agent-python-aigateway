@@ -280,6 +280,7 @@ The AI Gateway module uses the live `2025-09-01-preview` contracts:
 - `Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models`
 - `Microsoft.ApiManagement/aigateways/workspaces/aliases`
 - `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
+- `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
 - `Microsoft.ApiManagement/aigateways/apiKeys`
 - `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
@@ -311,9 +312,10 @@ The role assignment must be created with a direct ARM role-assignment PUT from
 the `azd` postprovision hook. The generated managed resource group has a deny
 assignment that blocks creating this nested role assignment through ARM/Bicep.
 The hook then configures
-`Microsoft.ApiManagement/aigateways/{gatewayName}/telemetryExporters/applicationInsights`
+`Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
 as `kind: OpenTelemetry`, with the Application Insights resource ID, OTLP signal
-endpoints, and managed-identity audience `https://monitor.azure.com`. Metrics
+endpoints, and `openTelemetry.credentials.managedIdentity` audience
+`https://monitor.azure.com`. Metrics
 and logs are sufficient for portal dashboard eligibility; the preview service
 may omit a supplied `tracesEndpoint` from exporter GET responses.
 

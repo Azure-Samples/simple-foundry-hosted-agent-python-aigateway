@@ -194,8 +194,10 @@ for hook in \
     "TracesIngestionEndpoint" \
     "3913510d-42f4-4e42-8a64-420c390055eb" \
     "OpenTelemetry" \
+    "credentials" \
+    "managedIdentity" \
     "https://monitor.azure.com" \
-    "telemetryExporters/applicationInsights"; do
+    "workspaces/default/telemetryExporters/applicationInsights"; do
     if ! grep -Fq "$token" "$hook"; then
       echo "The postprovision hook is missing native OpenTelemetry monitoring configuration: $token" >&2
       echo "Hook: $hook" >&2

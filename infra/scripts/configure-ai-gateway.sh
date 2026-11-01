@@ -217,7 +217,7 @@ PY
     --body "$role_assignment_body" \
     -o none
 
-  exporter_uri="https://management.azure.com${gateway_resource_id}/telemetryExporters/applicationInsights?api-version=${AI_GATEWAY_API_VERSION}"
+  exporter_uri="https://management.azure.com${gateway_resource_id}/workspaces/default/telemetryExporters/applicationInsights?api-version=${AI_GATEWAY_API_VERSION}"
   if exporter_kind="$(az rest --method get --uri "$exporter_uri" --query properties.kind -o tsv 2>/dev/null)" &&
     [ "$exporter_kind" != "OpenTelemetry" ]; then
     echo "Replacing the legacy Application Insights exporter because exporter kind is immutable."
@@ -251,7 +251,7 @@ PY
           metricsEndpoint:$metricsEndpoint,
           logsEndpoint:$logsEndpoint,
           tracesEndpoint:$tracesEndpoint,
-          managedIdentity:{resource:"https://monitor.azure.com"}
+          credentials:{managedIdentity:{resource:"https://monitor.azure.com"}}
         }
       }
     }')"

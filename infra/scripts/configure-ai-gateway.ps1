@@ -190,7 +190,7 @@ function Configure-GatewayMonitoring($MonitoringEnabled, $GatewayResourceId, $Su
     Write-Host "Assigning Monitoring Metrics Publisher at the Application Insights managed DCR scope."
     Invoke-AzRestPutJson "https://management.azure.com${roleAssignmentId}?api-version=$roleAssignmentsApiVersion" $roleAssignmentBody
 
-    $exporterUri = "https://management.azure.com${GatewayResourceId}/telemetryExporters/applicationInsights?api-version=$aiGatewayApiVersion"
+    $exporterUri = "https://management.azure.com${GatewayResourceId}/workspaces/default/telemetryExporters/applicationInsights?api-version=$aiGatewayApiVersion"
     $exporterExists = $true
     try {
         $exporterKind = [string](az rest --method get --uri $exporterUri --query properties.kind -o tsv 2>$null)
@@ -226,8 +226,10 @@ function Configure-GatewayMonitoring($MonitoringEnabled, $GatewayResourceId, $Su
                 metricsEndpoint = [string]$appInsightsProperties.MetricsIngestionEndpoint
                 logsEndpoint = [string]$appInsightsProperties.LogsIngestionEndpoint
                 tracesEndpoint = [string]$appInsightsProperties.TracesIngestionEndpoint
-                managedIdentity = @{
-                    resource = "https://monitor.azure.com"
+                credentials = @{
+                    managedIdentity = @{
+                        resource = "https://monitor.azure.com"
+                    }
                 }
             }
         }
