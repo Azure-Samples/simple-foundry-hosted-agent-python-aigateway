@@ -25,8 +25,9 @@ Functions application.
   and deployments.
 - `infra/foundry-agents/main.bicep` creates the agent project, storage,
   Container Registry, monitoring, connections, and RBAC.
-- `infra/ai-gateway/main.bicep` creates AI Gateway, its Connector Namespace,
-  model provider, model registrations, runtime key, and monitoring, and invokes
+- `infra/ai-gateway/main.bicep` creates AI Gateway,
+  model provider, model registrations, runtime key, and workspace-based
+  Application Insights resource, and invokes
   `infra/foundry-agents/github-connection.bicep` in the agents resource group.
 - `chat.py` is a local console client for the Responses endpoint.
 
@@ -266,7 +267,7 @@ The root deployment creates three resource groups:
 - `foundryagents` for the Foundry project, agent hosting, storage, Container
   Registry, and hosted-agent monitoring.
 - `foundrymodels` for the separate Foundry model account and deployments.
-- `gateway` for the standalone AI Gateway, Connector Namespace, Gateway
+- `gateway` for the standalone AI Gateway, Gateway
   monitoring, model provider, model registrations, and model aliases.
 
 The only cross-group runtime authorization is the AI Gateway system identity's
@@ -284,11 +285,10 @@ The AI Gateway module uses the live `2025-09-01-preview` contracts:
 - `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
 - `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
 - `Microsoft.ApiManagement/aigateways/apiKeys`
-- `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
-The Connector Namespace uses the same name, resource group, and location as
-the AI Gateway. It is a separate resource from the GitHub MCP
-ToolServer and supports connector-backed scenarios.
+`Microsoft.ApiManagement/aigateways` is a hidden resource type in the Azure
+Portal until the portal extension rollout completes. Check **Show hidden types**
+in the resource group view to see it.
 
 The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
@@ -324,6 +324,39 @@ dependencies, target, and absence of secret outputs. A fresh and repeated
 response contract and Toolbox attachment end to end; compilation alone cannot
 verify a service response.
 
+### Native OpenTelemetry monitoring
+
+AI Gateway monitoring is enabled by the root `enableMonitoring` parameter
+(`ENABLE_MONITORING`, default `true`). The gateway's workspace-based Application
+Insights component sets `AzureMonitorWorkspaceIngestionMode: Enabled`; Bicep
+suppresses BCP037 for this preview property. The deployment exports
+`AI_GATEWAY_APP_INSIGHTS_ID`, `AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID`, and
+`AI_GATEWAY_PRINCIPAL_ID` for the postprovision hook.
+
+The hook registers `Microsoft.Monitor` when needed and polls the Application
+Insights resource until its managed DCR/DCE and `IngestionEndpoint`,
+`MetricsIngestionEndpoint`, `LogsIngestionEndpoint`, `TracesIngestionEndpoint`,
+and `DefaultDataCollectionRuleResourceId` are populated. It grants the Gateway
+system identity **Monitoring Metrics Publisher**
+(`3913510d-42f4-4e42-8a64-420c390055eb`) at that generated DCR scope.
+
+The role assignment must be created with a direct ARM role-assignment PUT from
+the `azd` postprovision hook. The generated managed resource group has a deny
+assignment that blocks creating this nested role assignment through ARM/Bicep.
+The hook then configures
+`Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
+as `kind: OpenTelemetry`, with the Application Insights resource ID, OTLP signal
+endpoints, and `openTelemetry.credentials.managedIdentity` audience
+`https://monitor.azure.com`. Metrics
+and logs are sufficient for portal dashboard eligibility; the preview service
+may omit a supplied `tracesEndpoint` from exporter GET responses.
+
+Exporter `kind` is immutable. When replacing an existing legacy
+`applicationInsights` exporter, the hook deletes it before creating the native
+OpenTelemetry exporter. Do not restore an inline Bicep exporter: its endpoints
+and DCR-scoped authorization are only available after Application Insights has
+provisioned its managed resources.
+
 The Foundry model provider uses:
 
 - `kind: Foundry`
@@ -355,7 +388,7 @@ sends the alias name as the OpenAI `model`.
 The default split is:
 
 - Foundry, storage, Container Registry, and monitoring: `eastus2`
-- AI Gateway and Connector Namespace: `eastus2`
+- AI Gateway: `eastus2`
 
 The Foundry region allowlist is:
 
