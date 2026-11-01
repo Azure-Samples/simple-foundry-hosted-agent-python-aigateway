@@ -87,6 +87,16 @@ param aiGatewayName string = ''
 @description('Default GitHub repository for the daily digest automation.')
 param githubRepository string = 'microsoft/agent-framework'
 
+@secure()
+@description('Optional GitHub MCP Authorization header value (for example, Bearer <token>) for declarative Bicep toolServer provisioning.')
+param githubMcpAuthorization string = ''
+
+@description('GitHub MCP server URL.')
+param githubMcpServerUrl string = 'https://api.githubcopilot.com/mcp/'
+
+@description('Comma-separated read-only GitHub MCP tools exposed by the gateway.')
+param githubMcpTools string = 'list_pull_requests,list_issues,actions_list'
+
 @description('Backing Foundry model name for the efficient mini deployment.')
 param miniModelName string = 'gpt-5.4-mini'
 
@@ -259,6 +269,9 @@ module aiGateway './ai-gateway/main.bicep' = {
     foundryAgentsResourceGroupName: foundryAgentsRg.name
     foundryAgentsAccountName: foundryAgents.outputs.aiServicesName
     foundryAgentsProjectName: foundryAgents.outputs.aiProjectName
+    foundryAgentsAccountPrincipalId: foundryAgents.outputs.aiServicesPrincipalId
+    foundryAgentsProjectPrincipalId: foundryAgents.outputs.aiProjectPrincipalId
+    principalId: principalId
     tags: tags
     enableMonitoring: enableMonitoring
     deployApimGatewayViaBicep: true
@@ -307,6 +320,47 @@ module aiGateway './ai-gateway/main.bicep' = {
         ]
       }
     ]
+    toolServerConfigs: empty(githubMcpAuthorization) ? {} : {
+      github: {
+        displayName: 'GitHub repository digest'
+        description: 'Read-only GitHub tools for repository digests.'
+        type: 'mcp'
+        failureMode: 'failClosed'
+        policies: [
+          {
+            type: 'contentSafety'
+            hateSeverity: 'Medium'
+            selfHarmSeverity: 'Medium'
+            sexualSeverity: 'Medium'
+            violenceSeverity: 'Medium'
+          }
+        ]
+        endpoints: [
+          {
+            namespace: 'github'
+            kind: 'mcp'
+            mcp: {
+              url: githubMcpServerUrl
+              transport: 'streamableHttp'
+            }
+            credentials: {
+              type: 'header'
+              headers: {
+                Authorization: [
+                  githubMcpAuthorization
+                ]
+                'X-MCP-Readonly': [
+                  'true'
+                ]
+                'X-MCP-Tools': [
+                  githubMcpTools
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
   }
 }
 

@@ -308,6 +308,107 @@ class ResponsesHostingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await model_http_client.aclose()
 
+    async def test_managed_identity_bearer_auth_when_gateway_api_key_is_unset(self) -> None:
+        model_requests: list[tuple[dict[str, object], httpx.Headers]] = []
+        message = {
+            "id": "msg_mi_1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "MI_OK", "annotations": []}],
+        }
+        completed_response = {
+            "id": "resp_mi_1",
+            "object": "response",
+            "created_at": 0,
+            "model": "gpt-latest",
+            "status": "completed",
+            "output": [message],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+        events = [
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {**completed_response, "status": "in_progress", "output": []},
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": completed_response,
+            },
+        ]
+        stream_body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+        async def model_handler(request: httpx.Request) -> httpx.Response:
+            model_requests.append((json.loads(request.content), request.headers))
+            return httpx.Response(
+                200,
+                text=stream_body,
+                headers={"content-type": "text/event-stream"},
+            )
+
+        model_http_client = httpx.AsyncClient(transport=httpx.MockTransport(model_handler))
+
+        def create_test_chat_client(**kwargs: object) -> OpenAIChatClient:
+            openai_client = AsyncOpenAI(
+                api_key=kwargs["api_key"],
+                base_url=kwargs["base_url"],
+                default_headers=kwargs.get("default_headers"),
+                http_client=model_http_client,
+                max_retries=0,
+            )
+            return OpenAIChatClient(
+                model=kwargs["model"],
+                async_client=openai_client,
+            )
+
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "AZURE_AI_GATEWAY_ENDPOINT": "https://mock.invalid/",
+                        "AZURE_AI_GATEWAY_MODEL": "gpt-latest",
+                    },
+                    clear=False,
+                ),
+                patch.object(
+                    repo_digest_agent,
+                    "get_bearer_token_provider",
+                    return_value=lambda: "entra-mi-token",
+                ) as token_provider_mock,
+                patch.object(repo_digest_agent, "OpenAIChatClient", side_effect=create_test_chat_client),
+                patch.object(repo_digest_agent, "_github_toolbox", return_value=None),
+            ):
+                os.environ.pop("AZURE_AI_GATEWAY_API_KEY", None)
+                server = ResponsesHostServer(
+                    agent=repo_digest_agent.build_agent,
+                    history_source="agent_server",
+                    response_store=InMemoryResponseProvider(),
+                )
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=server),
+                    base_url="http://test",
+                ) as app:
+                    resp = await app.post(
+                        "/responses",
+                        json={"input": "Verify MI auth.", "store": False, "stream": False},
+                    )
+
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.json()["status"], "completed")
+            token_provider_mock.assert_called_once()
+            self.assertEqual(token_provider_mock.call_args.args[1], "https://azure-api.net/aigateway/.default")
+            self.assertEqual(len(model_requests), 1)
+            _, headers = model_requests[0]
+            self.assertEqual(headers.get("authorization"), "Bearer entra-mi-token")
+            self.assertIsNone(headers.get("api-key"))
+        finally:
+            await model_http_client.aclose()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,11 @@ param modelAliasesConfig array = []
 param foundryAgentsResourceGroupName string = resourceGroup().name
 param foundryAgentsAccountName string = ''
 param foundryAgentsProjectName string = ''
+param foundryAgentsAccountPrincipalId string = ''
+param foundryAgentsProjectPrincipalId string = ''
+param principalId string = ''
+param useManagedIdentityForFoundryConnections bool = true
+param aiGatewayAudience string = 'https://azure-api.net/aigateway'
 @secure()
 param toolServerConfigs object = {}
 
@@ -27,6 +32,7 @@ var aiGatewayApiVersion = '2025-09-01-preview'
 var appInsightsApiVersion = '2020-02-02'
 var logAnalyticsApiVersion = '2023-09-01'
 var telemetryWorkspaceName = 'default'
+var aiGatewayUserRoleDefinitionId = 'caad7a21-134e-43f4-a550-c5ffc17e051c'
 var normalizedFoundryEndpoint = endsWith(foundryEndpoint, '/') ? foundryEndpoint : '${foundryEndpoint}/'
 #disable-next-line BCP081
 resource aiGateway 'Microsoft.ApiManagement/aigateways@2025-09-01-preview' = if (deployApimGatewayViaBicep) {
@@ -193,16 +199,52 @@ resource runtimeApiKey 'Microsoft.ApiManagement/aigateways/apiKeys@2025-09-01-pr
   }
 }
 
+resource aiGatewayProjectUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApimGatewayViaBicep && !empty(foundryAgentsProjectName) && !empty(foundryAgentsProjectPrincipalId)) {
+  scope: aiGateway
+  name: guid(aiGateway.id, aiGatewayUserRoleDefinitionId, foundryAgentsProjectName)
+  properties: {
+    principalId: foundryAgentsProjectPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aiGatewayUserRoleDefinitionId)
+  }
+}
+
+resource aiGatewayAccountUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApimGatewayViaBicep && !empty(foundryAgentsAccountName) && !empty(foundryAgentsAccountPrincipalId)) {
+  scope: aiGateway
+  name: guid(aiGateway.id, aiGatewayUserRoleDefinitionId, foundryAgentsAccountName)
+  properties: {
+    principalId: foundryAgentsAccountPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aiGatewayUserRoleDefinitionId)
+  }
+}
+
+resource aiGatewayDeveloperUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApimGatewayViaBicep && !empty(principalId)) {
+  scope: aiGateway
+  name: guid(aiGateway.id, aiGatewayUserRoleDefinitionId, principalId)
+  properties: {
+    principalId: principalId
+    principalType: 'User'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aiGatewayUserRoleDefinitionId)
+  }
+}
+
 var runtimeHostname = deployApimGatewayViaBicep ? (aiGateway!.properties.?frontend.?defaultHostname ?? replace(aiGateway!.properties.?gatewayUrl ?? '', 'https://', '')) : ''
 
 module githubConnection '../foundry-agents/github-connection.bicep' = if (deployApimGatewayViaBicep && !empty(foundryAgentsProjectName)) {
   name: 'github-connection-${uniqueString(gatewayName, foundryAgentsProjectName)}'
   scope: resourceGroup(foundryAgentsResourceGroupName)
+  dependsOn: [
+    aiGatewayProjectUserRoleAssignment
+    aiGatewayAccountUserRoleAssignment
+  ]
   params: {
     aiServicesName: foundryAgentsAccountName
     aiProjectName: foundryAgentsProjectName
     gatewayUrl: 'https://${runtimeHostname}'
-    gatewayApiKey: runtimeApiKey!.listSecrets().key
+    useManagedIdentity: useManagedIdentityForFoundryConnections
+    gatewayAudience: aiGatewayAudience
+    gatewayApiKey: useManagedIdentityForFoundryConnections ? '' : (runtimeApiKey!.listSecrets().?primaryKey ?? runtimeApiKey!.listSecrets().?key ?? '')
   }
 }
 

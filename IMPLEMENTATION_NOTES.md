@@ -48,9 +48,9 @@ flowchart LR
   github["GitHub MCP server"]
 
   operator --> agent
-  agent -->|"model request and Api-Key"| gateway
+  agent -->|"model request (Entra ID or Api-Key)"| gateway
   agent -->|"Entra identity"| toolbox
-  toolbox -->|"project connection and Api-Key"| gateway
+  toolbox -->|"project managed identity (AI Gateway User RBAC)"| gateway
   gateway -->|"managed identity and Foundry User RBAC"| models
   gateway -->|"repository-scoped read-only credential"| github
 ```
@@ -58,7 +58,7 @@ flowchart LR
 Model requests use
 `<gateway>/default/models/openai/v1/chat/completions` or the corresponding
 Responses route. Tool requests use
-`<gateway>/default/mcp/github/mcp`.
+`<gateway>/default/toolservers/github/mcp`.
 
 The agent does not call a Foundry model endpoint directly. This keeps model
 traffic behind AI Gateway policies. `FoundryChatClient` is intentionally not
@@ -73,11 +73,13 @@ Agent -> Foundry Toolbox -> AI Gateway -> GitHub MCP
 ```
 
 `toolbox.yaml` declares one MCP source backed by the `aigw-github` project
-connection. Bicep creates that `RemoteTool` / `CustomKeys` connection and stores
-the generated AI Gateway `Api-Key` in it. The postprovision hook creates
-`repo-digest-tools` through the Foundry data-plane API using that connection;
-it no longer runs `azd ai connection create`. `FoundryToolbox` authenticates
-the agent-to-Toolbox request with Entra identity.
+connection. Bicep creates that `RemoteTool` / `ProjectManagedIdentity`
+connection (`audience: https://azure-api.net/aigateway`) and assigns the
+`AI Gateway User` (`caad7a21-134e-43f4-a550-c5ffc17e051c`) role on AI Gateway
+to the Foundry project and account managed identities. The postprovision hook
+creates `repo-digest-tools` through the Foundry data-plane API using that
+connection; it no longer runs `azd ai connection create`. `FoundryToolbox`
+authenticates the agent-to-Toolbox request with Entra identity.
 
 The GitHub source sets `require_approval: "never"` because all three exposed
 operations are read-only and the scheduled routine cannot pause for approval.
@@ -294,22 +296,26 @@ The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
 collection before configuring the GitHub ToolServer.
 
-The gateway module receives the agents account and project names from the
-Foundry module outputs, so it waits for project provisioning. Its nested
-connection module targets the agents resource group and depends on the gateway
-and `apiKeys/default`. The connection target is
-`<gateway>/default/mcp/github/mcp`, with `isSharedToAll: true` and
-`metadata.type: custom_MCP`. Stable resource names and incremental deployments
-allow repeated `azd up` runs to update the same connection.
+The gateway module receives the agents account and project names and managed
+identity principal IDs from the Foundry module outputs, so it waits for project
+provisioning. It assigns the `AI Gateway User`
+(`caad7a21-134e-43f4-a550-c5ffc17e051c`) role on AI Gateway to the Foundry
+project and account managed identities (and optional developer `principalId`),
+and its nested connection module targets the agents resource group. The
+connection target is `<gateway>/default/toolservers/github/mcp`, with
+`authType: ProjectManagedIdentity` (`audience: https://azure-api.net/aigateway`),
+`isSharedToAll: true`, and `metadata.type: custom_MCP`. Stable resource names
+and incremental deployments allow repeated `azd up` runs to update the same
+connection.
 
-The preview key contract used by the deployment is
-`runtimeApiKey.listSecrets().key` at `2025-09-01-preview`. Bicep compiles this
-created-resource call to ARM `listSecrets(resourceId(...), apiVersion).key`
-and adds the key resource dependency. The value crosses the module boundary
-only through an `@secure()` parameter (`securestring` in ARM), never an output.
-The deploying identity needs permission to list the gateway key and write
-project connections in the agents resource group. Do not log resolved
-deployment parameters or run the hooks with shell tracing/debug logging.
+When `useManagedIdentityForFoundryConnections: false` is explicitly opted into,
+the connection falls back to `CustomKeys` using
+`runtimeApiKey.listSecrets().?primaryKey ?? runtimeApiKey.listSecrets().?key` at
+`2025-09-01-preview` (the live ARM `listSecrets` response returns `primaryKey`
+and `secondaryKey`). The value crosses the module boundary only through an
+`@secure()` parameter (`securestring` in ARM), never an output. Do not log
+resolved deployment parameters or run the hooks with shell tracing/debug
+logging.
 
 Both postprovision hooks still retrieve the key with `listSecrets` (preferring
 `key`, with legacy response-field and `listValues` compatibility fallbacks) and
