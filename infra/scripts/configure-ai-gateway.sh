@@ -11,7 +11,6 @@ ROLE_ASSIGNMENTS_API_VERSION="2022-04-01"
 DEFAULT_REPOSITORY="microsoft/agent-framework"
 GITHUB_MCP_SERVER="https://api.githubcopilot.com/mcp/"
 GITHUB_MCP_TOOLS="list_pull_requests,list_issues,actions_list"
-TOOLBOX_CONNECTION_NAME="aigw-github"
 TOOLBOX_NAME="repo-digest-tools"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -61,7 +60,7 @@ get_gateway_api_key_value() {
     --method post \
     --uri "https://management.azure.com${gateway_resource_id}/apiKeys/default/listSecrets?api-version=${AI_GATEWAY_API_VERSION}" \
     --body '{}' \
-    --query "primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" \
+    --query "key || primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" \
     -o tsv 2>/dev/null)" && [ -n "$value" ]; then
     printf '%s' "$value"
     return 0
@@ -510,16 +509,7 @@ azd env set GITHUB_REPOSITORY "$github_repository"
 azd env set AZURE_AI_GATEWAY_API_KEY "$gateway_api_key" >/dev/null
 azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
 
-echo "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
-azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
-  --kind remote-tool \
-  --target "${gateway_url%/}/default/toolservers/github/mcp" \
-  --auth-type custom-keys \
-  --custom-key "Api-Key=${gateway_api_key}" \
-  --force \
-  --no-prompt \
-  --project-endpoint "$project_endpoint" \
-  -o json >/dev/null
+echo "Connecting Foundry Toolbox using the Bicep-provisioned aigw-github connection."
 
 if ! toolbox_json="$(azd ai toolbox show "$TOOLBOX_NAME" \
   --no-prompt \

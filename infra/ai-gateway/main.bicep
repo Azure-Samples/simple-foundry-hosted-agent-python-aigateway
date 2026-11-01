@@ -17,6 +17,9 @@ param foundryResourceIds array = []
 param foundryManagedIdentityResource string = 'https://cognitiveservices.azure.com/'
 param foundryModels array = []
 param modelAliasesConfig array = []
+param foundryAgentsResourceGroupName string = resourceGroup().name
+param foundryAgentsAccountName string = ''
+param foundryAgentsProjectName string = ''
 @secure()
 param toolServerConfigs object = {}
 
@@ -164,6 +167,19 @@ resource runtimeApiKey 'Microsoft.ApiManagement/aigateways/apiKeys@2025-09-01-pr
   }
 }
 
+var runtimeHostname = deployApimGatewayViaBicep ? (aiGateway!.properties.?frontend.?defaultHostname ?? replace(aiGateway!.properties.?gatewayUrl ?? '', 'https://', '')) : ''
+
+module githubConnection '../foundry-agents/github-connection.bicep' = if (deployApimGatewayViaBicep && !empty(foundryAgentsProjectName)) {
+  name: 'github-connection-${uniqueString(gatewayName, foundryAgentsProjectName)}'
+  scope: resourceGroup(foundryAgentsResourceGroupName)
+  params: {
+    aiServicesName: foundryAgentsAccountName
+    aiProjectName: foundryAgentsProjectName
+    gatewayUrl: 'https://${runtimeHostname}'
+    gatewayApiKey: runtimeApiKey!.listSecrets().key
+  }
+}
+
 var modelAliasResourceIds = [for alias in modelAliasesConfig: resourceId('Microsoft.ApiManagement/aigateways/workspaces/aliases', gatewayName, telemetryWorkspaceName, alias.armName)]
 
 output apimGatewayId string = resourceId('Microsoft.ApiManagement/aigateways', gatewayName)
@@ -171,7 +187,7 @@ output appInsightsId string = enableMonitoring ? gatewayAppInsights.id : ''
 output appInsightsName string = enableMonitoring ? gatewayAppInsights.name : ''
 output logAnalyticsWorkspaceId string = enableMonitoring ? logAnalyticsWorkspace.id : ''
 output logAnalyticsWorkspaceName string = enableMonitoring ? logAnalyticsWorkspace.name : ''
-output runtimeHostname string = deployApimGatewayViaBicep ? (aiGateway!.properties.?frontend.?defaultHostname ?? replace(aiGateway!.properties.?gatewayUrl ?? '', 'https://', '')) : ''
+output runtimeHostname string = runtimeHostname
 output runtimeApiKeyId string = deployApimGatewayViaBicep ? runtimeApiKey.id : ''
 output gatewayPrincipalId string = deployApimGatewayViaBicep ? aiGateway!.identity.principalId : ''
 output foundryUserRoleAssignmentName string = deployFoundryProvider && deployApimGatewayViaBicep && !empty(foundryResourceIds) ? foundryUserRoleAssignments[0]!.outputs.roleAssignmentName : ''
