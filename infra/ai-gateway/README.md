@@ -4,10 +4,9 @@ Run the commands in this README from the `infra/ai-gateway/` directory.
 
 [`main.bicep`](main.bicep) is a resource-group-scoped module for an AI Gateway
 with Premium SKU. With the default `deployApimGatewayViaBicep: true`, it
-creates `Microsoft.ApiManagement/aigateways`, the
-`Microsoft.Web/connectorGateways` Connector Namespace, and `apiKeys/default`.
-When monitoring is enabled, it also provisions Log Analytics, Application
-Insights, and the Gateway telemetry exporter.
+creates `Microsoft.ApiManagement/aigateways` and `apiKeys/default`.
+When monitoring is enabled, it also provisions Log Analytics and a
+workspace-based Application Insights component (`AzureMonitorWorkspaceIngestionMode: Enabled`).
 
 When `deployFoundryProvider` is enabled, the module assigns the Gateway identity
 the Foundry User role on each account in `foundryResourceIds`, registers the
@@ -16,6 +15,10 @@ configured aliases. The sample routes `gpt-latest` through three tiers:
 `gpt-6.1-sol` → `gpt-6-sol` → `gpt-5.4-mini` (priorities 0, 1, and 2,
 respectively, with weight 100 each). `gpt-mini-latest` targets the mini model
 directly.
+
+> **Note:** `Microsoft.ApiManagement/aigateways` is a hidden resource type in
+> the Azure Portal until the portal extension rollout completes. In the
+> resource group view, check **Show hidden types** to see it.
 
 ## Default Gateway policies
 
@@ -31,7 +34,7 @@ server. The `gpt-latest` alias routes through `gpt-6.1-sol` (priority 0),
 
 ## Gateway without a Foundry provider
 
-Create a resource group, then deploy just the Gateway and Connector Namespace.
+Create a resource group, then deploy just the Gateway.
 This minimal mode leaves `deployFoundryProvider` disabled, so it does not
 register model catalog entries or aliases:
 
@@ -136,13 +139,70 @@ az deployment group create \
   --parameters @/tmp/ai-gateway.parameters.json
 ```
 
+## Foundry GitHub remote-tool connection
+
+When `foundryAgentsProjectName` is provided (as in the subscription-scoped
+`../main.bicep` entry point), this module deploys
+`../foundry-agents/github-connection.bicep` into the agents resource group.
+
+The `aigw-github` project connection uses
+`Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview`,
+category `RemoteTool`, authentication `CustomKeys`, and target
+`https://<gateway-host>/default/mcp/github/mcp`. It is shared with the project
+and has `metadata.type: custom_MCP`.
+
+The gateway's `2025-09-01-preview` key is read with
+`runtimeApiKey.listSecrets().key` and passed only through the connection
+module's `@secure()` `gatewayApiKey` parameter. ARM waits for key creation
+before evaluating the nested deployment. No deployment output contains the
+secret. The deployment identity needs key-listing permission in the gateway
+resource group and connection-write permission in the agents resource group.
+Stable names and incremental deployment keep repeat provisioning idempotent.
+
+## AI Gateway monitoring
+
+The AI Gateway module creates a workspace-based Application Insights component
+with `AzureMonitorWorkspaceIngestionMode: Enabled`. The property is not yet in
+the Bicep type for `Microsoft.Insights/components@2020-02-02`, so the template
+documents and suppresses BCP037 for that property.
+
+The `azd` postprovision hook configures native OpenTelemetry monitoring after
+Application Insights has created its managed DCR/DCE and OTLP endpoints:
+
+1. Register `Microsoft.Monitor` if it is not already registered.
+2. Wait for the Application Insights ingestion endpoints and managed DCR scope.
+3. Assign the Gateway system identity **Monitoring Metrics Publisher**
+   (`3913510d-42f4-4e42-8a64-420c390055eb`) at the generated DCR scope using a
+   direct ARM role-assignment PUT. The managed resource group's deny assignment
+   blocks creating this nested role assignment from ARM/Bicep.
+4. Create
+   `Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
+   as `kind: OpenTelemetry`, using the Application Insights resource ID, the
+   metrics/logs/traces OTLP endpoints, and `openTelemetry.credentials.managedIdentity`
+   audience `https://monitor.azure.com`.
+
+Exporter `kind` is immutable. The hook deletes an existing exporter with a
+different kind before recreating it as OpenTelemetry. The preview service can
+omit `tracesEndpoint` from exporter GET responses; metrics and logs are enough
+for the portal dashboard eligibility check.
+
+## Postprovision configuration
+
 After the Gateway and Foundry project exist, run the postprovision configuration
-script to add the GitHub MCP ToolServer and create the Foundry project
-connection and `repo-digest-tools` Toolbox:
+script to configure native OpenTelemetry monitoring, add the GitHub MCP
+ToolServer, and create the `repo-digest-tools`
+Toolbox:
 
 ```bash
 bash ../scripts/configure-ai-gateway.sh
 ```
+
+The POSIX and PowerShell postprovision hooks no longer create the connection.
+They still register the GitHub ToolServer using the local `GH_TOKEN` or GitHub
+CLI credential, verify model-route readiness, save `AZURE_AI_GATEWAY_API_KEY`
+to the local azd environment for development, and create the
+`repo-digest-tools` Toolbox through the Foundry data-plane API.
+`toolbox.yaml` references `project_connection_id: aigw-github`.
 
 See [the scripts README](../scripts/README.md) for required azd values and
 GitHub authentication. A standalone Gateway deployment does not create the

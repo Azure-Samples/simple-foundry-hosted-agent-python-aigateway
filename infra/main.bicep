@@ -69,6 +69,9 @@ param containerRegistryName string = ''
 @description('Application Insights component name for AI Gateway monitoring. Defaults to a deterministic name.')
 param appInsightsName string = ''
 
+@description('Whether to configure monitoring for the AI Gateway.')
+param enableMonitoring bool = true
+
 @description('Log Analytics workspace name for Application Insights. Defaults to a deterministic name in the application resource group.')
 param logAnalyticsWorkspaceName string = ''
 
@@ -253,8 +256,11 @@ module aiGateway './ai-gateway/main.bicep' = {
     location: location
     gatewayLocation: aiGatewayLocation
     gatewayName: effectiveAiGatewayName
+    foundryAgentsResourceGroupName: foundryAgentsRg.name
+    foundryAgentsAccountName: foundryAgents.outputs.aiServicesName
+    foundryAgentsProjectName: foundryAgents.outputs.aiProjectName
     tags: tags
-    enableMonitoring: true
+    enableMonitoring: enableMonitoring
     deployApimGatewayViaBicep: true
     appInsightsName: effectiveAppInsightsName
     logAnalyticsWorkspaceName: effectiveLogAnalyticsWorkspaceName
@@ -335,12 +341,15 @@ output AI_GATEWAY_LOCATION string = aiGatewayLocation
 output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.apimGatewayId
 output AI_GATEWAY_MODEL_ALIAS_IDS array = aiGateway.outputs.modelAliasIds
 output AI_GATEWAY_DEFAULT_MODEL_ALIAS_NAME string = aiGateway.outputs.defaultModelAliasName
-output AI_GATEWAY_CONNECTOR_NAMESPACE_RESOURCE_ID string = aiGateway.outputs.connectorNamespaceId
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = aiGateway.outputs.foundryUserRoleAssignmentName
 output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
+output AI_GATEWAY_APP_INSIGHTS_ID string = aiGateway.outputs.appInsightsId
+output AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
+output AI_GATEWAY_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
 output APPLICATION_INSIGHTS_NAME string = aiGateway.outputs.appInsightsName
 output LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
 output LOG_ANALYTICS_WORKSPACE_NAME string = aiGateway.outputs.logAnalyticsWorkspaceName
+output ENABLE_MONITORING bool = enableMonitoring
 output AZURE_AI_GATEWAY_ENDPOINT string = 'https://${aiGateway.outputs.runtimeHostname}/'
 output AZURE_AI_GATEWAY_MODEL string = modelAliasName
 output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelAliasName

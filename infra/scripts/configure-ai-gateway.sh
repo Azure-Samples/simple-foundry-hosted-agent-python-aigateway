@@ -5,10 +5,12 @@ umask 077
 AI_GATEWAY_API_VERSION="2025-09-01-preview"
 LEGACY_AI_GATEWAY_API_VERSION="2025-09-01-preview"
 FOUNDRY_USER_ROLE_ID="53ca6127-db72-4b80-b1b0-d745d6d5456d"
+MONITORING_METRICS_PUBLISHER_ROLE_ID="3913510d-42f4-4e42-8a64-420c390055eb"
+APP_INSIGHTS_API_VERSION="2020-02-02"
+ROLE_ASSIGNMENTS_API_VERSION="2022-04-01"
 DEFAULT_REPOSITORY="microsoft/agent-framework"
 GITHUB_MCP_SERVER="https://api.githubcopilot.com/mcp/"
 GITHUB_MCP_TOOLS="list_pull_requests,list_issues,actions_list"
-TOOLBOX_CONNECTION_NAME="aigw-github"
 TOOLBOX_NAME="repo-digest-tools"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -58,7 +60,7 @@ get_gateway_api_key_value() {
     --method post \
     --uri "https://management.azure.com${gateway_resource_id}/apiKeys/default/listSecrets?api-version=${AI_GATEWAY_API_VERSION}" \
     --body '{}' \
-    --query "primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" \
+    --query "key || primaryKey || properties.primaryKey || primaryValue || properties.primaryValue" \
     -o tsv 2>/dev/null)" && [ -n "$value" ]; then
     printf '%s' "$value"
     return 0
@@ -118,6 +120,142 @@ verify_gateway_model_route() {
   fi
   rm -f "$response_file"
   return 1
+}
+
+configure_gateway_monitoring() {
+  local monitoring_enabled="$1"
+  local gateway_resource_id="$2"
+  local subscription_id="$3"
+  local gateway_app_insights_id
+  local log_analytics_workspace_id
+  local gateway_principal_id
+  local app_insights_json=""
+  local metrics_endpoint=""
+  local logs_endpoint=""
+  local traces_endpoint=""
+  local dcr_scope=""
+  local role_assignment_name
+  local role_assignment_id
+  local role_definition_id
+  local role_assignment_body
+  local exporter_uri
+  local exporter_kind
+  local exporter_body
+  local provider_state
+
+  case "$monitoring_enabled" in
+    true|TRUE|True|1|yes|YES|Yes) ;;
+    *)
+      echo "AI Gateway monitoring is disabled; skipping OpenTelemetry exporter setup."
+      return 0
+      ;;
+  esac
+
+  gateway_app_insights_id="$(require_value AI_GATEWAY_APP_INSIGHTS_ID "$(first_value "${AI_GATEWAY_APP_INSIGHTS_ID:-}" "$(azd_value AI_GATEWAY_APP_INSIGHTS_ID)")")"
+  log_analytics_workspace_id="$(require_value AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID "$(first_value "${AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID:-}" "$(azd_value AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID)")")"
+  gateway_principal_id="$(require_value AI_GATEWAY_PRINCIPAL_ID "$(first_value "${AI_GATEWAY_PRINCIPAL_ID:-}" "$(azd_value AI_GATEWAY_PRINCIPAL_ID)")")"
+
+  provider_state="$(az provider show --namespace Microsoft.Monitor --query registrationState -o tsv 2>/dev/null || true)"
+  if [ "$provider_state" != "Registered" ]; then
+    echo "Registering the Microsoft.Monitor resource provider."
+    az provider register --namespace Microsoft.Monitor --wait
+  fi
+
+  for attempt in $(seq 1 60); do
+    if app_insights_json="$(az rest \
+      --method get \
+      --uri "https://management.azure.com${gateway_app_insights_id}?api-version=${APP_INSIGHTS_API_VERSION}" \
+      --query properties \
+      -o json 2>/dev/null)" &&
+      jq -e '
+        (.IngestionEndpoint // "") != "" and
+        (.MetricsIngestionEndpoint // "") != "" and
+        (.LogsIngestionEndpoint // "") != "" and
+        (.TracesIngestionEndpoint // "") != "" and
+        (.DefaultDataCollectionRuleResourceId // "") != ""
+      ' >/dev/null <<< "$app_insights_json"; then
+      metrics_endpoint="$(jq -r '.MetricsIngestionEndpoint' <<< "$app_insights_json")"
+      logs_endpoint="$(jq -r '.LogsIngestionEndpoint' <<< "$app_insights_json")"
+      traces_endpoint="$(jq -r '.TracesIngestionEndpoint' <<< "$app_insights_json")"
+      dcr_scope="$(jq -r '.DefaultDataCollectionRuleResourceId' <<< "$app_insights_json")"
+      break
+    fi
+    echo "Waiting for Application Insights managed DCR/DCE and OTLP endpoints, attempt=${attempt}."
+    sleep 10
+  done
+  if [ -z "$dcr_scope" ]; then
+    echo "Application Insights did not populate its managed DCR/DCE and OTLP endpoints." >&2
+    exit 1
+  fi
+  if [ "$(jq -r '.WorkspaceResourceId // ""' <<< "$app_insights_json")" != "$log_analytics_workspace_id" ]; then
+    echo "AI Gateway Application Insights is not connected to the expected Log Analytics workspace." >&2
+    exit 1
+  fi
+
+  role_assignment_name="$(python3 - "$dcr_scope" "$gateway_principal_id" "$MONITORING_METRICS_PUBLISHER_ROLE_ID" <<'PY'
+import hashlib
+import sys
+import uuid
+
+digest = bytearray(hashlib.sha256("|".join(sys.argv[1:]).encode()).digest()[:16])
+digest[6] = (digest[6] & 0x0F) | 0x50
+digest[8] = (digest[8] & 0x3F) | 0x80
+print(uuid.UUID(bytes=bytes(digest)))
+PY
+)"
+  role_assignment_id="${dcr_scope}/providers/Microsoft.Authorization/roleAssignments/${role_assignment_name}"
+  role_definition_id="/subscriptions/${subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${MONITORING_METRICS_PUBLISHER_ROLE_ID}"
+  role_assignment_body="$(jq -cn \
+    --arg principalId "$gateway_principal_id" \
+    --arg roleDefinitionId "$role_definition_id" \
+    '{properties:{principalId:$principalId,principalType:"ServicePrincipal",roleDefinitionId:$roleDefinitionId}}')"
+  echo "Assigning Monitoring Metrics Publisher at the Application Insights managed DCR scope."
+  az rest \
+    --method put \
+    --uri "https://management.azure.com${role_assignment_id}?api-version=${ROLE_ASSIGNMENTS_API_VERSION}" \
+    --body "$role_assignment_body" \
+    -o none
+
+  exporter_uri="https://management.azure.com${gateway_resource_id}/workspaces/default/telemetryExporters/applicationInsights?api-version=${AI_GATEWAY_API_VERSION}"
+  if exporter_kind="$(az rest --method get --uri "$exporter_uri" --query properties.kind -o tsv 2>/dev/null)" &&
+    [ "$exporter_kind" != "OpenTelemetry" ]; then
+    echo "Replacing the legacy Application Insights exporter because exporter kind is immutable."
+    az rest --method delete --uri "$exporter_uri" -o none
+    exporter_deleted=false
+    for attempt in $(seq 1 30); do
+      if ! az rest --method get --uri "$exporter_uri" -o none 2>/dev/null; then
+        exporter_deleted=true
+        break
+      fi
+      echo "Waiting for the legacy telemetry exporter deletion, attempt=${attempt}."
+      sleep 2
+    done
+    if [ "$exporter_deleted" != true ]; then
+      echo "The legacy telemetry exporter was not deleted before recreation." >&2
+      exit 1
+    fi
+  fi
+
+  exporter_body="$(jq -cn \
+    --arg resourceId "$gateway_app_insights_id" \
+    --arg metricsEndpoint "$metrics_endpoint" \
+    --arg logsEndpoint "$logs_endpoint" \
+    --arg tracesEndpoint "$traces_endpoint" \
+    '{
+      properties: {
+        kind: "OpenTelemetry",
+        payloadCapture: false,
+        applicationInsights: {resourceId:$resourceId},
+        openTelemetry: {
+          metricsEndpoint:$metricsEndpoint,
+          logsEndpoint:$logsEndpoint,
+          tracesEndpoint:$tracesEndpoint,
+          credentials:{managedIdentity:{resource:"https://monitor.azure.com"}}
+        }
+      }
+    }')"
+  echo "Configuring the native OpenTelemetry exporter for AI Gateway."
+  az rest --method put --uri "$exporter_uri" --body "$exporter_body" -o none
 }
 
 prepare_bicep_rbac() {
@@ -288,6 +426,9 @@ if [ "$provider_auth" != "ManagedIdentity" ]; then
   exit 1
 fi
 
+monitoring_enabled="$(first_value "${ENABLE_MONITORING:-}" "$(azd_value ENABLE_MONITORING)" "true")"
+configure_gateway_monitoring "$monitoring_enabled" "$gateway_resource_id" "$subscription_id"
+
 remove_azd_env_values GITHUB_MCP_TOKEN GITHUB_TOKEN
 github_token=""
 if command -v gh >/dev/null 2>&1; then
@@ -375,16 +516,7 @@ azd env set GITHUB_REPOSITORY "$github_repository"
 azd env set AZURE_AI_GATEWAY_API_KEY "$gateway_api_key" >/dev/null
 azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
 
-echo "Connecting Foundry Toolbox to the AI Gateway GitHub ToolServer."
-azd ai connection create "$TOOLBOX_CONNECTION_NAME" \
-  --kind remote-tool \
-  --target "${gateway_url%/}/default/toolservers/github/mcp" \
-  --auth-type custom-keys \
-  --custom-key "Api-Key=${gateway_api_key}" \
-  --force \
-  --no-prompt \
-  --project-endpoint "$project_endpoint" \
-  -o json >/dev/null
+echo "Connecting Foundry Toolbox using the Bicep-provisioned aigw-github connection."
 
 if ! toolbox_json="$(azd ai toolbox show "$TOOLBOX_NAME" \
   --no-prompt \

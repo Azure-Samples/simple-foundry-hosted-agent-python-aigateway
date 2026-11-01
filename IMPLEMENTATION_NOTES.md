@@ -25,8 +25,10 @@ Functions application.
   and deployments.
 - `infra/foundry-agents/main.bicep` creates the agent project, storage,
   Container Registry, monitoring, connections, and RBAC.
-- `infra/ai-gateway/main.bicep` creates AI Gateway, its Connector Namespace,
-  model provider, model registrations, runtime key, and monitoring.
+- `infra/ai-gateway/main.bicep` creates AI Gateway,
+  model provider, model registrations, runtime key, and workspace-based
+  Application Insights resource, and invokes
+  `infra/foundry-agents/github-connection.bicep` in the agents resource group.
 - `chat.py` is a local console client for the Responses endpoint.
 
 The scheduled routine is named `daily-repo-digest`. It runs at 9 AM in the
@@ -56,7 +58,7 @@ flowchart LR
 Model requests use
 `<gateway>/default/models/openai/v1/chat/completions` or the corresponding
 Responses route. Tool requests use
-`<gateway>/default/toolservers/github/mcp`.
+`<gateway>/default/mcp/github/mcp`.
 
 The agent does not call a Foundry model endpoint directly. This keeps model
 traffic behind AI Gateway policies. `FoundryChatClient` is intentionally not
@@ -71,9 +73,11 @@ Agent -> Foundry Toolbox -> AI Gateway -> GitHub MCP
 ```
 
 `toolbox.yaml` declares one MCP source backed by the `aigw-github` project
-connection. The postprovision hook stores the AI Gateway `Api-Key` in that
-connection. `FoundryToolbox` authenticates the agent-to-Toolbox request with
-Entra identity.
+connection. Bicep creates that `RemoteTool` / `CustomKeys` connection and stores
+the generated AI Gateway `Api-Key` in it. The postprovision hook creates
+`repo-digest-tools` through the Foundry data-plane API using that connection;
+it no longer runs `azd ai connection create`. `FoundryToolbox` authenticates
+the agent-to-Toolbox request with Entra identity.
 
 The GitHub source sets `require_approval: "never"` because all three exposed
 operations are read-only and the scheduled routine cannot pause for approval.
@@ -263,7 +267,7 @@ The root deployment creates three resource groups:
 - `foundryagents` for the Foundry project, agent hosting, storage, Container
   Registry, and hosted-agent monitoring.
 - `foundrymodels` for the separate Foundry model account and deployments.
-- `gateway` for the standalone AI Gateway, Connector Namespace, Gateway
+- `gateway` for the standalone AI Gateway, Gateway
   monitoring, model provider, model registrations, and model aliases.
 
 The only cross-group runtime authorization is the AI Gateway system identity's
@@ -281,15 +285,77 @@ The AI Gateway module uses the live `2025-09-01-preview` contracts:
 - `Microsoft.ApiManagement/aigateways/workspaces/toolServers`
 - `Microsoft.ApiManagement/aigateways/workspaces/telemetryExporters`
 - `Microsoft.ApiManagement/aigateways/apiKeys`
-- `Microsoft.Web/connectorGateways@2026-05-01-preview`
 
-The Connector Namespace uses the same name, resource group, and location as
-the AI Gateway. It is a separate resource from the GitHub MCP
-ToolServer and supports connector-backed scenarios.
+`Microsoft.ApiManagement/aigateways` is a hidden resource type in the Azure
+Portal until the portal extension rollout completes. Check **Show hidden types**
+in the resource group view to see it.
 
 The predefined `workspaces/default` resource is the parent of every
 workspace-scoped child. The postprovision hook waits for the workspace child
 collection before configuring the GitHub ToolServer.
+
+The gateway module receives the agents account and project names from the
+Foundry module outputs, so it waits for project provisioning. Its nested
+connection module targets the agents resource group and depends on the gateway
+and `apiKeys/default`. The connection target is
+`<gateway>/default/mcp/github/mcp`, with `isSharedToAll: true` and
+`metadata.type: custom_MCP`. Stable resource names and incremental deployments
+allow repeated `azd up` runs to update the same connection.
+
+The preview key contract used by the deployment is
+`runtimeApiKey.listSecrets().key` at `2025-09-01-preview`. Bicep compiles this
+created-resource call to ARM `listSecrets(resourceId(...), apiVersion).key`
+and adds the key resource dependency. The value crosses the module boundary
+only through an `@secure()` parameter (`securestring` in ARM), never an output.
+The deploying identity needs permission to list the gateway key and write
+project connections in the agents resource group. Do not log resolved
+deployment parameters or run the hooks with shell tracing/debug logging.
+
+Both postprovision hooks still retrieve the key with `listSecrets` (preferring
+`key`, with legacy response-field and `listValues` compatibility fallbacks) and
+save `AZURE_AI_GATEWAY_API_KEY` to the local azd environment for
+`create-dev-env.sh`. They also inject the GitHub credential, check model-route
+readiness, and create the data-plane Toolbox if absent. Failed-resource
+recovery remains in the lifecycle scripts.
+
+Compilation and regression tests verify the ARM expression, secure parameter,
+dependencies, target, and absence of secret outputs. A fresh and repeated
+`azd up` against the live preview service are still required to validate its
+response contract and Toolbox attachment end to end; compilation alone cannot
+verify a service response.
+
+### Native OpenTelemetry monitoring
+
+AI Gateway monitoring is enabled by the root `enableMonitoring` parameter
+(`ENABLE_MONITORING`, default `true`). The gateway's workspace-based Application
+Insights component sets `AzureMonitorWorkspaceIngestionMode: Enabled`; Bicep
+suppresses BCP037 for this preview property. The deployment exports
+`AI_GATEWAY_APP_INSIGHTS_ID`, `AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID`, and
+`AI_GATEWAY_PRINCIPAL_ID` for the postprovision hook.
+
+The hook registers `Microsoft.Monitor` when needed and polls the Application
+Insights resource until its managed DCR/DCE and `IngestionEndpoint`,
+`MetricsIngestionEndpoint`, `LogsIngestionEndpoint`, `TracesIngestionEndpoint`,
+and `DefaultDataCollectionRuleResourceId` are populated. It grants the Gateway
+system identity **Monitoring Metrics Publisher**
+(`3913510d-42f4-4e42-8a64-420c390055eb`) at that generated DCR scope.
+
+The role assignment must be created with a direct ARM role-assignment PUT from
+the `azd` postprovision hook. The generated managed resource group has a deny
+assignment that blocks creating this nested role assignment through ARM/Bicep.
+The hook then configures
+`Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
+as `kind: OpenTelemetry`, with the Application Insights resource ID, OTLP signal
+endpoints, and `openTelemetry.credentials.managedIdentity` audience
+`https://monitor.azure.com`. Metrics
+and logs are sufficient for portal dashboard eligibility; the preview service
+may omit a supplied `tracesEndpoint` from exporter GET responses.
+
+Exporter `kind` is immutable. When replacing an existing legacy
+`applicationInsights` exporter, the hook deletes it before creating the native
+OpenTelemetry exporter. Do not restore an inline Bicep exporter: its endpoints
+and DCR-scoped authorization are only available after Application Insights has
+provisioned its managed resources.
 
 The Foundry model provider uses:
 
@@ -331,7 +397,7 @@ sends the alias name as the OpenAI `model`.
 The default split is:
 
 - Foundry, storage, Container Registry, and monitoring: `eastus2`
-- AI Gateway and Connector Namespace: `eastus2`
+- AI Gateway: `eastus2`
 
 The Foundry region allowlist is:
 
