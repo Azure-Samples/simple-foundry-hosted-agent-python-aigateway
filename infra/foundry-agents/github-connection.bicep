@@ -35,3 +35,6 @@ resource githubConnection 'Microsoft.CognitiveServices/accounts/projects/connect
     }
   }
 }
+
+output connectionId string = githubConnection.id
+output connectionName string = githubConnection.name

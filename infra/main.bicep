@@ -75,6 +75,10 @@ param enableMonitoring bool = true
 @description('Log Analytics workspace name for Application Insights. Defaults to a deterministic name in the application resource group.')
 param logAnalyticsWorkspaceName string = ''
 
+@secure()
+@description('Optional GitHub MCP Authorization header value (for example Bearer <token>). When omitted, the postprovision hook injects a transient gh auth token without persisting it in azd env.')
+param githubMcpAuthorization string = ''
+
 @description('Application Insights component for Foundry hosted-agent tracing.')
 param agentAppInsightsName string = ''
 
@@ -249,66 +253,265 @@ module foundryAgents './foundry-agents/main.bicep' = {
   }
 }
 
-module aiGateway './ai-gateway/main.bicep' = {
-  name: 'ai-gateway-${resourceToken}'
+module aiGatewayMonitoring './ai-gateway/monitoring.bicep' = {
+  name: 'ai-gateway-monitoring-${resourceToken}'
   scope: gatewayRg
   params: {
     location: location
-    gatewayLocation: aiGatewayLocation
-    gatewayName: effectiveAiGatewayName
-    foundryAgentsResourceGroupName: foundryAgentsRg.name
-    foundryAgentsAccountName: foundryAgents.outputs.aiServicesName
-    foundryAgentsProjectName: foundryAgents.outputs.aiProjectName
     tags: tags
     enableMonitoring: enableMonitoring
-    deployApimGatewayViaBicep: true
     appInsightsName: effectiveAppInsightsName
     logAnalyticsWorkspaceName: effectiveLogAnalyticsWorkspaceName
-    deployFoundryProvider: true
-    foundryProviderName: 'foundry'
-    foundryProviderDisplayName: 'Foundry'
-    foundryProviderDescription: 'Managed-identity Foundry provider for the deployments behind this sample.'
-    foundryEndpoint: foundryModels.outputs.aiServicesEndpoint
-    foundryResourceIds: [
-      foundryModels.outputs.aiServicesId
-    ]
-    foundryModels: [for (deployment, i) in gatewayModelDeployments: {
-      armName: deployment.deploymentName
-      description: deployment.description
-      resourceId: foundryModels.outputs.modelDeploymentIds[i]
-      modelName: deployment.modelName
-      modelVersion: deployment.modelVersion
-      apiFormat: 'OpenAIChatCompletions'
-      tokenLimit: deployment.capacity * 1000
-      costLimit: 10
-      contentSafetySeverity: 'Medium'
-      supportedEndpoints: [
-        '/openai/v1/chat/completions'
-        '/openai/v1/responses'
-      ]
-    }]
-    modelAliasesConfig: [
+  }
+}
+
+// Once the upstream AVM PR is approved and published, replace './avm/res/api-management/aigateway/main.bicep'
+// with 'br/public:avm/res/api-management/aigateway:0.1.0'.
+module aiGateway './avm/res/api-management/aigateway/main.bicep' = {
+  name: 'ai-gateway-${resourceToken}'
+  scope: gatewayRg
+  params: {
+    name: effectiveAiGatewayName
+    location: aiGatewayLocation
+    tags: tags
+    managedIdentities: {
+      systemAssigned: true
+    }
+    apiKeys: [
       {
-        armName: 'primary-router'
-        aliasName: modelAliasName
-        description: 'Primary model with automatic failover to the secondary full model and mini deployment.'
-        backendModels: effectiveModelAliasBackends
+        name: 'default'
+        properties: {
+          displayName: 'Default hosted agent key'
+        }
       }
+    ]
+    secrets: !empty(githubMcpAuthorization)
+      ? {
+          githubMcpAuth: githubMcpAuthorization
+        }
+      : {}
+    workspaces: [
       {
-        armName: 'mini-router'
-        aliasName: miniModelAliasName
-        description: 'Direct alias for the mini deployment.'
-        backendModels: [
+        name: 'default'
+        modelProviders: [
           {
-            modelArmName: miniModelDeploymentName
-            priority: 0
-            weight: 100
+            name: 'foundry'
+            properties: {
+              kind: 'Foundry'
+              displayName: 'Foundry'
+              description: 'Managed-identity Foundry provider for the deployments behind this sample.'
+              foundry: {
+                endpoint: foundryModels.outputs.aiServicesEndpoint
+                resourceIds: [
+                  foundryModels.outputs.aiServicesId
+                ]
+                assignUpstreamRole: true
+                authentication: {
+                  kind: 'ManagedIdentity'
+                  managedIdentity: {
+                    resource: 'https://cognitiveservices.azure.com/'
+                  }
+                }
+              }
+            }
+            models: [for (deployment, i) in gatewayModelDeployments: {
+              name: deployment.deploymentName
+              properties: {
+                displayName: deployment.modelName
+                description: deployment.description
+                apiFormat: 'OpenAIChatCompletions'
+                supportedEndpoints: [
+                  '/openai/v1/chat/completions'
+                  '/openai/v1/responses'
+                ]
+                deployment: {
+                  resourceId: foundryModels.outputs.modelDeploymentIds[i]
+                  modelName: deployment.deploymentName
+                  modelVersion: deployment.modelVersion
+                }
+                policies: [
+                  {
+                    type: 'tokenLimit'
+                    period: 'minute'
+                    count: deployment.capacity * 1000
+                    counterKey: [
+                      'identity'
+                    ]
+                  }
+                  {
+                    id: 'monthly-caller-budget'
+                    type: 'costLimit'
+                    period: 'month'
+                    amount: 10
+                    counterKey: [
+                      'identity'
+                    ]
+                  }
+                  {
+                    type: 'contentSafety'
+                    hateSeverity: 'Medium'
+                    selfHarmSeverity: 'Medium'
+                    sexualSeverity: 'Medium'
+                    violenceSeverity: 'Medium'
+                  }
+                ]
+              }
+            }]
           }
         ]
+        aliases: [
+          {
+            name: modelAliasName
+            properties: {
+              displayName: 'Primary Model Router'
+              description: 'Primary model with automatic failover to the secondary full model and mini deployment.'
+              routes: [for target in effectiveModelAliasBackends: {
+                providerName: 'foundry'
+                modelName: target.modelArmName
+                priority: target.priority
+                weight: target.weight
+              }]
+            }
+          }
+          {
+            name: miniModelAliasName
+            properties: {
+              displayName: 'Mini Model Router'
+              description: 'Direct alias for the mini deployment.'
+              routes: [
+                {
+                  providerName: 'foundry'
+                  modelName: miniModelDeploymentName
+                  priority: 0
+                  weight: 100
+                }
+              ]
+            }
+          }
+        ]
+        toolServers: [
+          {
+            name: 'github'
+            properties: {
+              displayName: 'GitHub repository digest'
+              description: 'Read-only GitHub tools for repository digests.'
+              type: 'mcp'
+              failureMode: 'failClosed'
+              policies: [
+                {
+                  type: 'tokenLimit'
+                  period: 'minute'
+                  count: 50000
+                  counterKey: [
+                    'identity'
+                  ]
+                }
+                {
+                  id: 'monthly-caller-budget'
+                  type: 'costLimit'
+                  period: 'month'
+                  amount: 5
+                  counterKey: [
+                    'identity'
+                  ]
+                }
+                {
+                  type: 'contentSafety'
+                  hateSeverity: 'Medium'
+                  selfHarmSeverity: 'Medium'
+                  sexualSeverity: 'Medium'
+                  violenceSeverity: 'Medium'
+                }
+              ]
+              endpoints: [
+                {
+                  namespace: 'github'
+                  kind: 'mcp'
+                  mcp: {
+                    url: 'https://api.githubcopilot.com/mcp/'
+                    transport: 'streamableHttp'
+                  }
+                  credentials: {
+                    type: 'header'
+                    headers: concat(
+                      !empty(githubMcpAuthorization)
+                        ? [
+                            {
+                              name: 'Authorization'
+                              secretName: 'githubMcpAuth'
+                            }
+                          ]
+                        : [],
+                      [
+                        {
+                          name: 'X-MCP-Readonly'
+                          value: 'true'
+                        }
+                        {
+                          name: 'X-MCP-Tools'
+                          value: 'list_pull_requests,list_issues,actions_list'
+                        }
+                      ]
+                    )
+                  }
+                }
+              ]
+            }
+          }
+        ]
+        telemetryExporters: enableMonitoring
+          ? [
+              {
+                name: 'applicationInsights'
+                properties: {
+                  kind: 'ApplicationInsights'
+                  payloadCapture: false
+                  applicationInsights: {
+                    resourceId: aiGatewayMonitoring.outputs.appInsightsId
+                  }
+                }
+              }
+            ]
+          : []
       }
     ]
   }
 }
+
+module foundryGithubConnection './ai-gateway/github-connection.bicep' = {
+  name: 'foundry-github-connection-${resourceToken}'
+  scope: gatewayRg
+  params: {
+    gatewayName: effectiveAiGatewayName
+    runtimeHostname: aiGateway.outputs.defaultHostname
+    foundryAgentsResourceGroupName: foundryAgentsRg.name
+    foundryAgentsAccountName: foundryAgents.outputs.aiServicesName
+    foundryAgentsProjectName: foundryAgents.outputs.aiProjectName
+  }
+}
+
+var foundryUserRoleDefinitionId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '53ca6127-db72-4b80-b1b0-d745d6d5456d'
+)
+var modelAliasResourceIds = [
+  subscriptionResourceId(
+    subscription().subscriptionId,
+    gatewayRg.name,
+    'Microsoft.ApiManagement/aigateways/workspaces/aliases',
+    effectiveAiGatewayName,
+    'default',
+    modelAliasName
+  )
+  subscriptionResourceId(
+    subscription().subscriptionId,
+    gatewayRg.name,
+    'Microsoft.ApiManagement/aigateways/workspaces/aliases',
+    effectiveAiGatewayName,
+    'default',
+    miniModelAliasName
+  )
+]
 
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -338,19 +541,23 @@ output TOOLBOX_NAME string = 'repo-digest-tools'
 output ENABLE_AI_GATEWAY bool = true
 output AI_GATEWAY_NAME string = effectiveAiGatewayName
 output AI_GATEWAY_LOCATION string = aiGatewayLocation
-output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.apimGatewayId
-output AI_GATEWAY_MODEL_ALIAS_IDS array = aiGateway.outputs.modelAliasIds
-output AI_GATEWAY_DEFAULT_MODEL_ALIAS_NAME string = aiGateway.outputs.defaultModelAliasName
-output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = aiGateway.outputs.foundryUserRoleAssignmentName
-output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
-output AI_GATEWAY_APP_INSIGHTS_ID string = aiGateway.outputs.appInsightsId
-output AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
-output AI_GATEWAY_PRINCIPAL_ID string = aiGateway.outputs.gatewayPrincipalId
-output APPLICATION_INSIGHTS_NAME string = aiGateway.outputs.appInsightsName
-output LOG_ANALYTICS_WORKSPACE_ID string = aiGateway.outputs.logAnalyticsWorkspaceId
-output LOG_ANALYTICS_WORKSPACE_NAME string = aiGateway.outputs.logAnalyticsWorkspaceName
+output AI_GATEWAY_RESOURCE_ID string = aiGateway.outputs.resourceId
+output AI_GATEWAY_MODEL_ALIAS_IDS array = modelAliasResourceIds
+output AI_GATEWAY_DEFAULT_MODEL_ALIAS_NAME string = modelAliasName
+output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_NAME string = guid(
+  foundryModels.outputs.aiServicesId,
+  aiGateway.outputs.resourceId,
+  foundryUserRoleDefinitionId
+)
+output AI_GATEWAY_FOUNDRY_ROLE_ASSIGNMENT_PRINCIPAL_ID string = aiGateway.outputs.?systemAssignedMIPrincipalId ?? ''
+output AI_GATEWAY_APP_INSIGHTS_ID string = aiGatewayMonitoring.outputs.appInsightsId
+output AI_GATEWAY_LOG_ANALYTICS_WORKSPACE_ID string = aiGatewayMonitoring.outputs.logAnalyticsWorkspaceId
+output AI_GATEWAY_PRINCIPAL_ID string = aiGateway.outputs.?systemAssignedMIPrincipalId ?? ''
+output APPLICATION_INSIGHTS_NAME string = aiGatewayMonitoring.outputs.appInsightsName
+output LOG_ANALYTICS_WORKSPACE_ID string = aiGatewayMonitoring.outputs.logAnalyticsWorkspaceId
+output LOG_ANALYTICS_WORKSPACE_NAME string = aiGatewayMonitoring.outputs.logAnalyticsWorkspaceName
 output ENABLE_MONITORING bool = enableMonitoring
-output AZURE_AI_GATEWAY_ENDPOINT string = 'https://${aiGateway.outputs.runtimeHostname}/'
+output AZURE_AI_GATEWAY_ENDPOINT string = 'https://${aiGateway.outputs.defaultHostname}/'
 output AZURE_AI_GATEWAY_MODEL string = modelAliasName
 output AZURE_AI_GATEWAY_MINI_MODEL string = miniModelAliasName
 output AI_GATEWAY_INTERNAL_MODEL_DEPLOYMENT string = modelDeploymentName

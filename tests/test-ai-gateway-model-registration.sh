@@ -130,15 +130,15 @@ done
 
 root_alias_input="$(jq -r '
   .. | objects
-  | select(has("modelAliasesConfig"))
-  | .modelAliasesConfig.value
+  | select(has("workspaces"))
+  | .workspaces.value
   | select(. != null)
 ' "$compiled_root_template")"
 
 if [[ "$root_alias_input" != *"modelArmName"* ||
   "$root_alias_input" != *"priority"* ||
   "$root_alias_input" != *"weight"* ||
-  "$root_alias_input" != *"primary-router"* ]]; then
+  "$root_alias_input" != *"Primary Model Router"* ]]; then
   echo "Root deployment must create a multi-model alias with explicit priority and weight routes." >&2
   echo "Actual: $root_alias_input" >&2
   exit 1
@@ -174,21 +174,18 @@ for setting in \
   fi
 done
 
-root_model_input="$(jq -r '
-  .. | objects
-  | select(has("foundryModels"))
-  | .foundryModels.copy[0].input
-  | select(. != null)
-' "$compiled_root_template")"
+root_model_input="$root_alias_input"
 for token in \
   "OpenAIChatCompletions" \
   "/openai/v1/chat/completions" \
   "/openai/v1/responses" \
-  "mul(variables('gatewayModelDeployments')[copyIndex('value')].capacity, 1000)" \
-  "'costLimit', 10" \
-  "'contentSafetySeverity', 'Medium'"; do
+  "mul(variables('gatewayModelDeployments')[copyIndex('models')].capacity, 1000)" \
+  '"amount": 10' \
+  '"hateSeverity": "Medium"' \
+  "https://api.githubcopilot.com/mcp/" \
+  "assignUpstreamRole"; do
   if ! grep -Fq "$token" <<< "$root_model_input"; then
-    echo "Root model registrations must use the live RP API, capacity-scaled token limits, and Medium content safety." >&2
+    echo "Root model registrations must use the AVM module, capacity-scaled token limits, Medium content safety, and GitHub MCP." >&2
     echo "Missing: $token" >&2
     echo "Actual: $root_model_input" >&2
     exit 1
