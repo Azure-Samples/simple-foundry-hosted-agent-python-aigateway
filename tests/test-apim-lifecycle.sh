@@ -419,6 +419,15 @@ for postprovision_script in \
   assert_contains "$postprovision_script" "Microsoft.ApiManagement/service"
   assert_contains "$postprovision_script" "frontend.defaultHostname"
   assert_contains "$postprovision_script" "/default/models/openai/v1/chat/completions"
+  assert_contains "$postprovision_script" "contentSafety"
+  assert_contains "$postprovision_script" "hateSeverity"
+  assert_contains "$postprovision_script" "selfHarmSeverity"
+  assert_contains "$postprovision_script" "sexualSeverity"
+  assert_contains "$postprovision_script" "violenceSeverity"
+  assert_contains "$postprovision_script" "Medium"
 done
+
+assert_contains "$repo_root/infra/scripts/configure-ai-gateway.sh" '"policies": [{'
+assert_contains "$repo_root/infra/scripts/configure-ai-gateway.ps1" 'policies = @('
 
 echo "APIM lifecycle tests passed."
