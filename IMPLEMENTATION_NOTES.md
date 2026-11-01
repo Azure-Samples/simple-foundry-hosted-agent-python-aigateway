@@ -276,7 +276,7 @@ role-definition ID used by the template is
 
 The AI Gateway module uses the live `2025-09-01-preview` contracts:
 
-- `Microsoft.ApiManagement/aigateways` with SKU `Consumption`
+- `Microsoft.ApiManagement/aigateways` with SKU `Premium`
 - `Microsoft.ApiManagement/aigateways/workspaces`
 - `Microsoft.ApiManagement/aigateways/workspaces/modelProviders`
 - `Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models`
