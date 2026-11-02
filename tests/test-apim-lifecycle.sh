@@ -429,5 +429,7 @@ done
 
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.sh" '"policies": [{'
 assert_contains "$repo_root/infra/scripts/configure-ai-gateway.ps1" 'policies = @('
+assert_not_contains "$repo_root/infra/scripts/configure-ai-gateway.sh" "jq "
+assert_not_contains "$repo_root/infra/scripts/manage-ai-gateway-lifecycle.sh" "jq "
 
 echo "APIM lifecycle tests passed."
