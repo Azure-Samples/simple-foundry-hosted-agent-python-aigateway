@@ -142,22 +142,25 @@ az deployment group create \
 ## Foundry GitHub remote-tool connection
 
 When `foundryAgentsProjectName` is provided (as in the subscription-scoped
-`../main.bicep` entry point), this module deploys
+`../main.bicep` entry point), this module assigns `AI Gateway User`
+(`caad7a21-134e-43f4-a550-c5ffc17e051c`) on AI Gateway to the Foundry project
+and account managed identities and deploys
 `../foundry-agents/github-connection.bicep` into the agents resource group.
 
 The `aigw-github` project connection uses
-`Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview`,
-category `RemoteTool`, authentication `CustomKeys`, and target
-`https://<gateway-host>/default/mcp/github/mcp`. It is shared with the project
-and has `metadata.type: custom_MCP`.
+`Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01`,
+category `RemoteTool`, authentication `ProjectManagedIdentity`
+(`audience: https://azure-api.net/aigateway`), and target
+`https://<gateway-host>/default/toolservers/github/mcp`. It is shared with the
+project and has `metadata.type: custom_MCP`.
 
-The gateway's `2025-09-01-preview` key is read with
-`runtimeApiKey.listSecrets().key` and passed only through the connection
-module's `@secure()` `gatewayApiKey` parameter. ARM waits for key creation
-before evaluating the nested deployment. No deployment output contains the
-secret. The deployment identity needs key-listing permission in the gateway
-resource group and connection-write permission in the agents resource group.
-Stable names and incremental deployment keep repeat provisioning idempotent.
+If `useManagedIdentityForFoundryConnections` is set to `false`, the connection
+falls back to `CustomKeys` using
+`runtimeApiKey.listSecrets().?primaryKey ?? runtimeApiKey.listSecrets().?key`
+(the live `2025-09-01-preview` `listSecrets` payload returns `primaryKey` and
+`secondaryKey`) passed only through the connection module's `@secure()`
+`gatewayApiKey` parameter. No deployment output contains the secret. Stable
+names and incremental deployment keep repeat provisioning idempotent.
 
 ## AI Gateway monitoring
 

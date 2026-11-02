@@ -208,26 +208,23 @@ if ! jq -e '
   | select(.type == "Microsoft.Resources/deployments" and .properties.parameters.gatewayApiKey != null)
   | . as $module
   | .properties.template as $template
-  | .properties.parameters.gatewayApiKey.value as $key
+  | (.properties.parameters.gatewayApiKey | tostring) as $key
   | ($module.resourceGroup == "[parameters('\''foundryAgentsResourceGroupName'\'')]")
     and ($module.properties.mode == "Incremental")
     and ($module.condition | contains("deployApimGatewayViaBicep") and contains("foundryAgentsProjectName"))
     and ($template.parameters.gatewayApiKey.type == "securestring")
-    and ($key == "[listSecrets(resourceId('\''Microsoft.ApiManagement/aigateways/apiKeys'\'', parameters('\''gatewayName'\''), '\''default'\''), '\''2025-09-01-preview'\'').key]")
+    and ($key | contains("listSecrets(resourceId('\''Microsoft.ApiManagement/aigateways/apiKeys'\'', parameters('\''gatewayName'\''), '\''default'\''), '\''2025-09-01-preview'\'')") and contains("primaryKey"))
     and ($module.dependsOn | any(contains("Microsoft.ApiManagement/aigateways/apiKeys")))
+    and ($module.dependsOn | any(contains("aiGatewayUserRoleDefinitionId")))
     and ($template.resources | length == 1)
+    and ($template.parameters.gatewayAudience.defaultValue == "https://azure-api.net/aigateway")
     and ($template.resources[0] |
       .type == "Microsoft.CognitiveServices/accounts/projects/connections"
-      and .apiVersion == "2025-04-01-preview"
+      and .apiVersion == "2025-06-01"
       and (.name | contains("aigw-github"))
-      and .properties.category == "RemoteTool"
-      and .properties.authType == "CustomKeys"
-      and .properties.target == "[format('\''{0}/default/mcp/github/mcp'\'', variables('\''normalizedGatewayUrl'\''))]"
-      and .properties.credentials.keys["Api-Key"] == "[parameters('\''gatewayApiKey'\'')]"
-      and .properties.isSharedToAll == true
-      and .properties.metadata.type == "custom_MCP")
+      and (.properties | tostring | (contains("ProjectManagedIdentity") and contains("{0}/default/toolservers/github/mcp") and contains("custom_MCP"))))
 ' "$compiled_template" >/dev/null; then
-  echo "GitHub connection must use a secure key parameter, the MCP route, and depend on the generated key." >&2
+  echo "GitHub connection must default to ProjectManagedIdentity on /default/toolservers/github/mcp with AI Gateway User RBAC and primaryKey fallback." >&2
   exit 1
 fi
 
@@ -237,9 +234,20 @@ if ! jq -e '
   | (.properties.parameters.foundryAgentsResourceGroupName.value == "[variables('\''effectiveFoundryAgentsResourceGroupName'\'')]")
     and (.properties.parameters.foundryAgentsAccountName.value | contains("outputs.aiServicesName.value"))
     and (.properties.parameters.foundryAgentsProjectName.value | contains("outputs.aiProjectName.value"))
+    and (.properties.parameters.foundryAgentsAccountPrincipalId.value | contains("outputs.aiServicesPrincipalId.value"))
+    and (.properties.parameters.foundryAgentsProjectPrincipalId.value | contains("outputs.aiProjectPrincipalId.value"))
     and (.dependsOn | any(contains("foundry-agents-")))
 ' "$compiled_root_template" >/dev/null; then
-  echo "Gateway connection provisioning must wait for the Foundry agents project in its own resource group." >&2
+  echo "Gateway connection provisioning must wait for the Foundry agents project and pass its managed identity principal IDs." >&2
+  exit 1
+fi
+
+if ! jq -e '
+  [.. | objects | select(.type? == "Microsoft.CognitiveServices/accounts/connections" and .properties.category? == "AppInsights")
+   | select(.properties.authType == "ProjectManagedIdentity" and (.properties.metadata.ApplicationInsightsConnectionString != null))]
+  | length == 1
+' "$compiled_root_template" >/dev/null; then
+  echo "Foundry AppInsights connection must use ProjectManagedIdentity with ApplicationInsightsConnectionString metadata." >&2
   exit 1
 fi
 

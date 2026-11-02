@@ -2,10 +2,12 @@
 
 import os
 
+from collections.abc import Awaitable, Callable
+
 from agent_framework import Agent
 from agent_framework.openai import OpenAIChatClient
 from agent_framework_foundry_hosting import FoundryToolbox
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import Omit
 
 from github_mcp_middleware import compact_github_results
@@ -14,6 +16,7 @@ DEFAULT_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "microsoft/agent-framew
 DEFAULT_GATEWAY_MODEL = "gpt-latest"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_048
 OPENAI_NO_BEARER_AUTH = "workload-identity-auth"
+AI_GATEWAY_TOKEN_SCOPE = "https://azure-api.net/aigateway/.default"
 
 INSTRUCTIONS = f"""
 You create concise daily GitHub repository digests from live repository data.
@@ -46,51 +49,71 @@ You create concise daily GitHub repository digests from live repository data.
 """
 
 
-def _gateway_settings() -> tuple[str, str]:
+def _azure_credential() -> DefaultAzureCredential:
+    return DefaultAzureCredential(
+        exclude_managed_identity_credential=not bool(
+            os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT")
+        )
+    )
+
+
+def _gateway_settings() -> tuple[str, str | None]:
     gateway_endpoint = os.environ.get("AZURE_AI_GATEWAY_ENDPOINT")
     if not gateway_endpoint:
         raise RuntimeError("Set AZURE_AI_GATEWAY_ENDPOINT to the AI Gateway endpoint.")
 
-    gateway_key = os.environ.get("AZURE_AI_GATEWAY_API_KEY")
-    if not gateway_key:
-        raise RuntimeError("Set AZURE_AI_GATEWAY_API_KEY to an AI Gateway key.")
-
+    gateway_key = os.environ.get("AZURE_AI_GATEWAY_API_KEY") or None
     return gateway_endpoint.rstrip("/"), gateway_key
+
+
+def _gateway_bearer_token_provider() -> Callable[[], Awaitable[str]]:
+    token_provider = get_bearer_token_provider(_azure_credential(), AI_GATEWAY_TOKEN_SCOPE)
+
+    async def _get_token() -> str:
+        return token_provider()
+
+    return _get_token
 
 
 def _gateway_client() -> OpenAIChatClient:
     gateway_endpoint, gateway_key = _gateway_settings()
+    base_url = gateway_endpoint + "/default/models/openai/v1/"
+    model = os.environ.get("AZURE_AI_GATEWAY_MODEL", DEFAULT_GATEWAY_MODEL)
+    if gateway_key:
+        return OpenAIChatClient(
+            model=model,
+            base_url=base_url,
+            api_key=OPENAI_NO_BEARER_AUTH,
+            default_headers={"Api-Key": gateway_key},
+        )
     return OpenAIChatClient(
-        model=os.environ.get("AZURE_AI_GATEWAY_MODEL", DEFAULT_GATEWAY_MODEL),
-        base_url=gateway_endpoint + "/default/models/openai/v1/",
-        # This OpenAI transport placeholder suppresses its Bearer header.
-        api_key=OPENAI_NO_BEARER_AUTH,
-        default_headers={"Api-Key": gateway_key},
+        model=model,
+        base_url=base_url,
+        api_key=_gateway_bearer_token_provider(),
     )
 
 
 def _github_toolbox() -> FoundryToolbox:
     return FoundryToolbox(
-        DefaultAzureCredential(
-            exclude_managed_identity_credential=not bool(
-                os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT")
-            )
-        ),
+        _azure_credential(),
         timeout=60,
     )
 
 
 def build_agent() -> Agent:
+    client = _gateway_client()
+    default_options: dict[str, object] = {
+        "store": False,
+        "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+    }
+    if getattr(getattr(client, "client", None), "_api_key_provider", None) is None:
+        default_options["extra_headers"] = {"Authorization": Omit()}
     return Agent(
-        client=_gateway_client(),
+        client=client,
         name="daily-repo-digest",
         description="Creates daily GitHub repository digests through AI Gateway.",
         instructions=INSTRUCTIONS,
         tools=_github_toolbox(),
-        default_options={
-            "store": False,
-            "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
-            "extra_headers": {"Authorization": Omit()},
-        },
+        default_options=default_options,
         middleware=[compact_github_results],
     )
