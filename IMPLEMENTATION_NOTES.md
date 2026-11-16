@@ -87,7 +87,7 @@ AI Gateway also injects:
 
 - `X-MCP-Readonly: true`
 - `X-MCP-Tools: list_pull_requests,list_issues,actions_list`
-- `failureMode: failClosed`
+- `mode: failClosed`
 
 Tool Search is not enabled. The agent has only three known tools and calls all
 three in one parallel tool round, so discovery would add latency without
@@ -277,7 +277,7 @@ Foundry User role assignment on the model account. The public Azure
 role-definition ID used by the template is
 `53ca6127-db72-4b80-b1b0-d745d6d5456d`.
 
-The AI Gateway module uses the live `2025-09-01-preview` contracts:
+The AI Gateway module uses the `2026-11-01` ARM contracts:
 
 - `Microsoft.ApiManagement/aigateways` with SKU `Premium`
 - `Microsoft.ApiManagement/aigateways/workspaces`
@@ -311,7 +311,7 @@ connection.
 When `useManagedIdentityForFoundryConnections: false` is explicitly opted into,
 the connection falls back to `CustomKeys` using
 `runtimeApiKey.listSecrets().?primaryKey ?? runtimeApiKey.listSecrets().?key` at
-`2025-09-01-preview` (the live ARM `listSecrets` response returns `primaryKey`
+`2026-11-01` (the live ARM `listSecrets` response returns `primaryKey`
 and `secondaryKey`). The value crosses the module boundary only through an
 `@secure()` parameter (`securestring` in ARM), never an output. Do not log
 resolved deployment parameters or run the hooks with shell tracing/debug
@@ -351,13 +351,12 @@ the `azd` postprovision hook. The generated managed resource group has a deny
 assignment that blocks creating this nested role assignment through ARM/Bicep.
 The hook then configures
 `Microsoft.ApiManagement/aigateways/{gatewayName}/workspaces/default/telemetryExporters/applicationInsights`
-as `kind: OpenTelemetry`, with the Application Insights resource ID, OTLP signal
-endpoints, and `openTelemetry.credentials.managedIdentity` audience
-`https://monitor.azure.com`. Metrics
-and logs are sufficient for portal dashboard eligibility; the preview service
-may omit a supplied `tracesEndpoint` from exporter GET responses.
+as `telemetryExporterType: OpenTelemetry`, with OTLP signal endpoint objects
+(`{ url: ... }`) and `authentication.managedIdentity` audience
+`https://monitor.azure.com`. Metrics and logs are sufficient for portal
+dashboard eligibility.
 
-Exporter `kind` is immutable. When replacing an existing legacy
+Exporter `telemetryExporterType` is immutable. When replacing an existing legacy
 `applicationInsights` exporter, the hook deletes it before creating the native
 OpenTelemetry exporter. Do not restore an inline Bicep exporter: its endpoints
 and DCR-scoped authorization are only available after Application Insights has
@@ -365,15 +364,13 @@ provisioned its managed resources.
 
 The Foundry model provider uses:
 
-- `kind: Foundry`
-- The model account endpoint returned by Azure
-- Foundry account and deployment resource IDs
-- `authentication.kind: ManagedIdentity`
-- Token resource `https://cognitiveservices.azure.com/`
+- `modelProviderType: Foundry`
+- `foundry.endpoint.url` set to the model account endpoint returned by Azure
+- Foundry account resource IDs in `foundry.resourceIds`
+- `authentication.managedIdentity` with token resource `https://cognitiveservices.azure.com/`
 
 Each model registration includes:
 
-- `apiFormat: OpenAIChatCompletions`
 - `/openai/v1/chat/completions`
 - `/openai/v1/responses`
 - The live `displayName` wire property
