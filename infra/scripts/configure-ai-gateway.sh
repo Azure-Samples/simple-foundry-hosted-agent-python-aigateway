@@ -511,6 +511,7 @@ case "$github_token" in
   *) github_authorization="Bearer $github_token" ;;
 esac
 
+# Temporarily omit contentSafety policy pending 2026-11-01 Content Safety API alignment
 tool_server_body="$(mktemp)"
 cat > "$tool_server_body" <<EOF
 {
@@ -519,13 +520,7 @@ cat > "$tool_server_body" <<EOF
     "displayName": "GitHub repository digest",
     "description": "Read-only GitHub tools for repository digests.",
     "blockList": [],
-    "policies": [{
-      "type": "contentSafety",
-      "hateSeverity": "Medium",
-      "selfHarmSeverity": "Medium",
-      "sexualSeverity": "Medium",
-      "violenceSeverity": "Medium"
-    }],
+    "policies": [],
     "endpoints": [{
       "namespace": "github",
       "kind": "mcp",
